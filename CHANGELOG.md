@@ -7,6 +7,22 @@ Every version below has a [GitHub release](https://github.com/mhoogenbosch/ha-pi
 full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matching version of the
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
+## [1.20.0] - 2026-09-27 (davbebawy fork: overlays)
+### Added
+- **Overlays:** named web pages pinned over the TV picture. Add one with **Add overlay** on the
+  integration page (a config subentry of the TV). Each gets its own device `<name> overlay` with a
+  **Show** switch (on while its popup is on the TV, read from the pushed state), settings as entities
+  (Page, Layout, Position, Animation, Sound, Width, Height, Duration, Padding, Corner radius, Border
+  width, Page opacity, Background opacity, Muted, Transparent, Custom URL, Title, Border color,
+  Background color) and a **Status** sensor that says why the popup left (replaced, time up, closed,
+  hidden). A setting change while the overlay is up redraws it after 1 s. Duration is the app's own
+  popup duration, so expiry arrives as a push. Settings are kept in `.storage/pipup.overlays.<entry_id>`.
+- Option **Overlay pages**: one `Name | URL` line per page; every overlay's Page select offers them
+  plus Custom URL.
+### Changed
+- Device lookups use `async_get_device_by_identifier` (the old call stops working in HA 2027.8).
+- Needs Home Assistant 2026.9 or newer.
+
 ## [1.19.1] - 2026-09-27
 ### Fixed
 - Options form failed to open (500): the update source check was a `vol.Match` in the schema, which the UI cannot serialize. It is now checked in the step, with an error on the field.

@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import PiPupCoordinator
 from .entity import PiPupEntity
+from .overlay_entities import async_add_sensors as async_add_overlay_sensors
 
 
 async def async_setup_entry(
@@ -35,6 +36,7 @@ async def async_setup_entry(
     if "uptime" in coordinator.data:
         entities.append(PiPupUptimeSensor(coordinator, entry))
     async_add_entities(entities)
+    async_add_overlay_sensors(coordinator.overlays, async_add_entities)
 
 
 class PiPupCurrentPopupSensor(PiPupEntity, SensorEntity):
