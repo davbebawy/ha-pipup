@@ -7,6 +7,10 @@ Every version below has a [GitHub release](https://github.com/mhoogenbosch/ha-pi
 full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matching version of the
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
+## [1.19.1] - 2026-09-27
+### Fixed
+- Options form failed to open (500): the update source check was a `vol.Match` in the schema, which the UI cannot serialize. It is now checked in the step, with an error on the field.
+
 ## [1.19.0] - 2026-09-27 (davbebawy fork: push instead of poll)
 ### Added
 - Push (app >= 0.23.0, davbebawy/PiPup): setup registers a local-only webhook per TV and sends its
