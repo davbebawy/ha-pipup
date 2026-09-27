@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components import webhook as webhook_component
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -22,9 +25,14 @@ from homeassistant.helpers.update_coordinator import (
 
 from .api import PiPupClient, PiPupError
 from .const import (
+    CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
+    CONF_UPDATE_SOURCE,
+    DEFAULT_UPDATE_SOURCE,
+    UPDATE_SOURCE_OFF,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    EVENT_PUSH,
     ISSUE_NO_OVERLAY,
     ISSUE_NO_OVERLAY_FIXABLE,
 )
@@ -57,6 +65,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             entry.data[CONF_PORT],
         )
         self.online = False
+        # set once the push webhook is registered (app >= 0.23.0); polling stops then
+        self._webhook_id: str | None = None
+        self._asserting = False
+        # update source the entities were built with; a change reloads the entry
+        self.applied_update_source: str | None = None
 
         scan_interval = entry.options.get(CONF_SCAN_INTERVAL)
         update_interval = (
@@ -87,7 +100,130 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.data
         self.online = True
         self._check_overlay_permission(data)
+        # The app lost its webhook (reinstall wipes its prefs): set it again.
+        if self._webhook_id and not (data.get("push") or {}).get("webhook"):
+            self.hass.async_create_task(self.async_assert_webhook())
         return data
+
+    @property
+    def push_supported(self) -> bool:
+        """True when the app can push its state (davbebawy fork, app >= 0.23.0)."""
+        return bool(((self.data or {}).get("push") or {}).get("supported"))
+
+    @property
+    def push_active(self) -> bool:
+        """True when this entry receives pushes and does not poll."""
+        return self._webhook_id is not None
+
+    async def async_setup_push(self) -> None:
+        """Register this entry's push webhook and hand its URL to the app.
+
+        From then on the coordinator does not poll: the app POSTs its /state JSON on
+        every change, and /state is read only at setup, after this integration's own
+        calls, and on Sync. An app without push keeps the timed poll.
+        """
+        if self._webhook_id is not None or not self.push_supported:
+            return
+        entry = self.config_entry
+        webhook_id = entry.data.get(CONF_PUSH_WEBHOOK_ID)
+        if not webhook_id:
+            webhook_id = secrets.token_hex(16)
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_PUSH_WEBHOOK_ID: webhook_id}
+            )
+        try:
+            webhook_component.async_register(
+                self.hass,
+                DOMAIN,
+                f"PiPup push ({entry.title})",
+                webhook_id,
+                self._async_handle_push,
+                local_only=True,
+                allowed_methods=["POST"],
+            )
+        except ValueError:
+            _LOGGER.debug("Push webhook for %s already registered", entry.title)
+        self._webhook_id = webhook_id
+        self.update_interval = None
+        await self.async_assert_webhook()
+
+    @callback
+    def async_teardown_push(self) -> None:
+        """Unregister the push webhook (entry unload)."""
+        if self._webhook_id is not None:
+            webhook_component.async_unregister(self.hass, self._webhook_id)
+            self._webhook_id = None
+
+    async def async_assert_webhook(self) -> None:
+        """Send the webhook URL to the app (it answers with a "settings" push)."""
+        if self._webhook_id is None or self._asserting:
+            return
+        self._asserting = True
+        try:
+            base = get_url(self.hass, allow_external=False, prefer_external=False)
+            await self.client.settings(webhook=f"{base}/api/webhook/{self._webhook_id}")
+        except NoURLAvailableError:
+            _LOGGER.warning(
+                "PiPup push for %s: HA has no internal URL the TV can reach; "
+                "set one under Settings > System > Network", self.config_entry.title
+            )
+        except PiPupError as err:
+            _LOGGER.warning("PiPup push for %s: cannot set webhook: %s",
+                            self.config_entry.title, err)
+        finally:
+            self._asserting = False
+
+    async def async_apply_app_settings(self) -> None:
+        """Send the update source option to the app (app >= 0.23.0), so the TV's own
+        release check uses the same source as the update entity, or none at all."""
+        if not self.push_supported:
+            return  # older app: no updateSource setting
+        source = self.config_entry.options.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE
+        values = (
+            {"updateChecks": "false"}
+            if source == UPDATE_SOURCE_OFF
+            else {"updateChecks": "true", "updateSource": source}
+        )
+        try:
+            await self.client.settings(**values)
+        except PiPupError as err:
+            _LOGGER.warning("PiPup %s: cannot set update source: %s",
+                            self.config_entry.title, err)
+
+    async def async_sync(self) -> None:
+        """Read /state now and re-assert the webhook (Sync button, pipup.sync)."""
+        await self.async_refresh()
+        if self._webhook_id is None:
+            await self.async_setup_push()
+        else:
+            await self.async_assert_webhook()
+        await self.async_apply_app_settings()
+
+    async def _async_handle_push(self, hass: HomeAssistant, webhook_id: str, request) -> None:
+        """Take one pushed state from the app."""
+        try:
+            data = await request.json()
+        except ValueError:
+            _LOGGER.warning("PiPup push: invalid JSON on %s", self.config_entry.title)
+            return
+        if not isinstance(data, dict) or data.get("app") != "PiPup":
+            return
+        extra = {k: data.pop(k, None) for k in ("event", "reason", "removedId", "replacedId")}
+        self.online = True
+        self._check_overlay_permission(data)
+        self.async_set_updated_data(data)
+        hass.bus.async_fire(
+            EVENT_PUSH,
+            {
+                "event": extra["event"],
+                "reason": extra["reason"],
+                "popup_id": (data.get("popup") or {}).get("id"),
+                "removed_id": extra["removedId"],
+                "replaced_id": extra["replacedId"],
+                "device_id": data.get("id"),
+                "device_name": data.get("name"),
+            },
+        )
 
     def _check_overlay_permission(self, data: dict[str, Any]) -> None:
         """Raise/clear a repair issue for a missing overlay app-op (app >= 0.7.0).

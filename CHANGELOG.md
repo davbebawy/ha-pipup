@@ -7,6 +7,19 @@ Every version below has a [GitHub release](https://github.com/mhoogenbosch/ha-pi
 full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matching version of the
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
+## [1.19.0] - 2026-09-27 (davbebawy fork: push instead of poll)
+### Added
+- Push (app >= 0.23.0, davbebawy/PiPup): setup registers a local-only webhook per TV and sends its
+  URL to the app (`/settings?webhook=`). The app POSTs its state on every change, so the coordinator
+  stops polling (`update_interval=None`). `/state` is read only at setup, after this integration's own
+  calls, and on Sync. Each push also fires a `pipup_event` event (event, reason, popup_id,
+  removed_id, replaced_id, device_id). An app without push keeps the timed poll.
+- **Sync** button and `pipup.sync` action: read the TV's state now and re-send the webhook.
+- `pipup.show`: `opacity` (0..1) and `transparent` (web_url pages with a transparent body show the TV).
+- Option **App update source**: `github:owner/repo` (default `github:davbebawy/PiPup`), a folder URL
+  with `releases.json` (LAN mirror), or `off`. Sent to the app as well, so the TV's own check uses the
+  same source; `off` also drops the update entity.
+
 ## [v1.18.0] — 2026-08-31 (announce version to the app)
 Companion to [app v0.21.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.21.0).
 ### Added

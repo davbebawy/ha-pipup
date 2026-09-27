@@ -12,6 +12,12 @@ DEFAULT_PORT: Final = 7979
 DEFAULT_SCAN_INTERVAL: Final = timedelta(seconds=15)
 
 CONF_SCAN_INTERVAL: Final = "scan_interval"
+# Where app releases come from (davbebawy fork): "github:<owner>/<repo>", an http(s)
+# folder URL holding releases.json + the APKs (a LAN mirror), or "off". Sent to the
+# app too (app >= 0.23.0), so the TV's own check and this entity agree.
+CONF_UPDATE_SOURCE: Final = "update_source"
+DEFAULT_UPDATE_SOURCE: Final = "github:davbebawy/PiPup"
+UPDATE_SOURCE_OFF: Final = "off"
 CONF_DEFAULT_POSITION: Final = "default_position"
 DEFAULT_POSITION: Final = "top_right"
 CONF_DEFAULT_DURATION: Final = "default_duration"
@@ -39,6 +45,7 @@ CONF_NAME_SUFFIX_APPLIED: Final = "name_suffix_applied"
 SERVICE_SHOW: Final = "show"
 SERVICE_FIX_PERMISSION: Final = "fix_permission"
 SERVICE_DISMISS: Final = "dismiss"
+SERVICE_SYNC: Final = "sync"
 
 ATTR_TITLE: Final = "title"
 ATTR_MESSAGE: Final = "message"
@@ -80,6 +87,9 @@ ATTR_DISMISS_SCREENSAVER: Final = "dismiss_screensaver"
 # app >= 0.19.0: compact buttons and entrance/exit animations
 # app >= 0.19.1: outer margin of the popup around its content
 ATTR_PADDING: Final = "padding"
+# davbebawy fork, app >= 0.22.0: see-through popups
+ATTR_OPACITY: Final = "opacity"
+ATTR_TRANSPARENT: Final = "transparent"
 ATTR_BUTTON_SIZE: Final = "button_size"
 ATTR_ANIMATION: Final = "animation"
 
@@ -87,6 +97,12 @@ URGENCIES: Final = ["info", "warning", "critical"]
 ICON_POSITIONS: Final = ["left", "right"]
 ANIMATIONS: Final = ["none", "fade", "slide_left", "slide_right", "slide_top", "slide_bottom"]
 DEFAULT_ICON_POSITION: Final = "left"
+
+# Push (davbebawy fork, app >= 0.23.0): per-entry webhook id, stored in entry data.
+# The id is the secret: the TV POSTs its /state JSON there on every change.
+CONF_PUSH_WEBHOOK_ID: Final = "push_webhook_id"
+# fired for every pushed event: event, reason, popup_id, removed_id, replaced_id, device_id
+EVENT_PUSH: Final = "pipup_event"
 
 # webhook that receives popup-button presses from the app; fires EVENT_BUTTON
 WEBHOOK_ID: Final = "pipup_buttons"

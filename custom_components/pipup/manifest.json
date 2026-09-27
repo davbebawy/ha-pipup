@@ -6,17 +6,18 @@
     "stream"
   ],
   "codeowners": [
-    "@mhoogenbosch"
+    "@mhoogenbosch",
+    "@davbebawy"
   ],
   "config_flow": true,
   "dependencies": [
     "webhook"
   ],
-  "documentation": "https://github.com/mhoogenbosch/ha-pipup",
-  "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/mhoogenbosch/ha-pipup/issues",
+  "documentation": "https://github.com/davbebawy/ha-pipup",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/davbebawy/ha-pipup/issues",
   "requirements": [],
-  "version": "1.18.0",
+  "version": "1.19.0",
   "zeroconf": [
     "_pipup._tcp.local."
   ]
