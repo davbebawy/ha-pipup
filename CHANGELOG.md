@@ -7,6 +7,19 @@ Every version below has a [GitHub release](https://github.com/mhoogenbosch/ha-pi
 full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matching version of the
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
+## [1.21.0] - 2026-09-27 (davbebawy fork: several popups at once)
+### Added
+- Several popups at once *(app >= 0.24.0)*: an overlay's **Show** switch reads the app's `popups`
+  list, so another popup opens beside the overlay and leaves it on.
+- Sensor **Popups on screen** (count). **Current popup** keeps the id of the top popup and gains a
+  `popups` attribute (every id, in stack order); the popup binary sensor gains the same attribute.
+- `pipup.show` field `bring_to_front`; overlay switch **Redraw on top**: a redraw opens on top of the
+  other popups instead of in its old place.
+- `pipup.dismiss` field `all`. `pipup_event` gains `shown_id` and `popup_ids`.
+### Changed
+- `pipup.dismiss` without `popup_id` removes the popup shown without an id (app >= 0.24.0); the
+  **Dismiss popup** button removes every popup.
+
 ## [1.20.0] - 2026-09-27 (davbebawy fork: overlays)
 ### Added
 - **Overlays:** named web pages pinned over the TV picture. Add one with **Add overlay** on the
