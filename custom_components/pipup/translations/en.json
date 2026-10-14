@@ -385,6 +385,14 @@
           "name": "Mute audio",
           "description": "Mutes audio in video/web streams. When omitted, the device default applies (integration settings; audio can freeze video on some TVs)."
         },
+        "media_full_bleed": {
+          "name": "Full-bleed media",
+          "description": "Run the video or image edge to edge across the top of the popup, its top corners rounded with the popup; title, message and buttons keep the padding. Older apps ignore it."
+        },
+        "buttons_inline": {
+          "name": "Inline buttons",
+          "description": "Put the buttons at the end of the title/message row instead of on their own row below it, e.g. a single compact ✕. Older apps ignore it."
+        },
         "tts": {
           "name": "Speak text",
           "description": "Text spoken aloud on the TV when the popup appears (app 0.2.5 or newer)."
@@ -472,6 +480,18 @@
         "bring_to_front": {
           "name": "Redraw on top",
           "description": "Only when a popup with this ID is already on the TV: draw the new one on top of the other popups instead of in its old place (app 0.24.0 or newer)."
+        },
+        "live_badge": {
+          "name": "Live badge",
+          "description": "Show a Live pill over a camera or video popup once the stream is playing (never over the still); older apps ignore it."
+        },
+        "live_badge_color": {
+          "name": "Live badge color",
+          "description": "Live pill color as #RRGGBB or #AARRGGBB; default amber."
+        },
+        "live_badge_position": {
+          "name": "Live badge position",
+          "description": "Corner of the video for the Live pill; default bottom right."
         }
       }
     },
