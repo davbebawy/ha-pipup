@@ -350,7 +350,7 @@ def build_device_payload(
     # per-device default. "none" suppresses a default animation for one call.
     if (button_size := pick(ATTR_BUTTON_SIZE, CONF_DEFAULT_BUTTON_SIZE, None)):
         payload["buttonSize"] = button_size
-    # newer apps (older ones ignore it): button style; each part is sent only when set
+    # app >= 0.28.0 (older ones ignore it): button style; each part is sent only when set
     for attr, key in (
         (ATTR_BUTTON_COLOR, "buttonColor"),
         (ATTR_BUTTON_FOCUS_COLOR, "buttonFocusColor"),
@@ -369,17 +369,17 @@ def build_device_payload(
     # app >= 0.24.0: a redraw opens on top of the other popups
     if data.get(ATTR_BRING_TO_FRONT):
         payload["bringToFront"] = True
-    # newer apps (older ones ignore it): a LIVE pill over the stream once it plays
+    # app >= 0.28.0 (older ones ignore it): a LIVE pill over the stream once it plays
     if data.get(ATTR_LIVE_BADGE):
         payload["liveBadge"] = True
         if color := data.get(ATTR_LIVE_BADGE_COLOR):
             payload["liveBadgeColor"] = color
         if position := data.get(ATTR_LIVE_BADGE_POSITION):
             payload["liveBadgePosition"] = position
-    # newer apps (older ones ignore it): media edge to edge, text and buttons padded
+    # app >= 0.28.0 (older ones ignore it): media edge to edge, text and buttons padded
     if data.get(ATTR_MEDIA_FULL_BLEED):
         payload["mediaFullBleed"] = True
-    # newer apps: buttons at the end of the title/message row instead of below it
+    # app >= 0.28.0: buttons at the end of the title/message row instead of below it
     if data.get(ATTR_BUTTONS_INLINE):
         payload["buttonsInline"] = True
     animation = data.get(ATTR_ANIMATION)
@@ -466,7 +466,7 @@ def build_device_payload(
     height = pick(ATTR_MEDIA_HEIGHT, CONF_DEFAULT_MEDIA_HEIGHT, 360)
     muted = data.get(ATTR_MUTED, opts.get(CONF_DEFAULT_MUTED, True))
 
-    # newer apps (older ones ignore it): an explicit per-call media_height fixes a video popup's box until the
+    # app >= 0.28.0 (older ones ignore it): an explicit per-call media_height fixes a video popup's box until the
     # stream reports its display aspect, so an anamorphic camera snapshot (an NVR's 704x480
     # still of a 4:3 picture) shows at the right shape. Only a per-call value is sent: the
     # per-device default would change every existing video popup's poster sizing.

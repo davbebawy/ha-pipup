@@ -138,6 +138,13 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
   edge sit one above the other instead of on top of each other. The rest move up when one closes.
   Set a per-TV default under *Configure* (*Default stacking*); `stack: none` overrides it for one
   call. An older app ignores the field and the popups overlap as before.
+- **Camera popup look and button style** (app >= 0.28.0, contributed by @pelkiegr):
+  `live_badge` (+ `live_badge_color`, `live_badge_position`) shows a "Live" pill once the stream plays,
+  `media_full_bleed` runs the media edge to edge, and `buttons_inline` puts the buttons beside the text.
+  `button_color`, `button_focus_color`, `button_text_color`, `button_border_color` and
+  `button_corner_radius` restyle the buttons. A per-call `media_height` now also fixes a video popup's
+  box until the first frame (the per-TV default is deliberately not sent for video). Everything is sent
+  only when set; an older app ignores it.
 - **Push instead of poll** (app >= 0.24.0): at setup every TV gets its own local-only webhook, and
   the app POSTs its state there on every change. Popup, screen and overlay entities follow within
   milliseconds instead of at the next 15 s poll. A 60 s heartbeat poll remains, because a TV that
