@@ -44,11 +44,17 @@ from .const import (
     ATTR_BUTTON_CORNER_RADIUS,
     ATTR_BUTTON_FOCUS_COLOR,
     ATTR_BUTTON_TEXT_COLOR,
+    ATTR_LIVE_BADGE,
+    ATTR_LIVE_BADGE_COLOR,
+    ATTR_LIVE_BADGE_POSITION,
+    LIVE_BADGE_POSITIONS,
     ATTR_DISMISS_SCREENSAVER,
     ATTR_ICON,
     ATTR_ICON_POSITION,
     ATTR_ICON_WIDTH,
     ATTR_IMAGE_URL,
+    ATTR_BUTTONS_INLINE,
+    ATTR_MEDIA_FULL_BLEED,
     ATTR_MEDIA_HEIGHT,
     ATTR_MEDIA_WIDTH,
     ATTR_MESSAGE,
@@ -151,6 +157,8 @@ SHOW_SCHEMA = vol.Schema(
             vol.Coerce(int), vol.Range(min=1, max=2160)
         ),
         vol.Optional(ATTR_MUTED): cv.boolean,
+        vol.Optional(ATTR_MEDIA_FULL_BLEED): cv.boolean,
+        vol.Optional(ATTR_BUTTONS_INLINE): cv.boolean,
         vol.Optional(ATTR_BUTTON_SIZE): vol.All(vol.Coerce(float), vol.Range(min=4, max=96)),
         vol.Optional(ATTR_BUTTON_COLOR): vol.Match(COLOR_REGEX),
         vol.Optional(ATTR_BUTTON_FOCUS_COLOR): vol.Match(COLOR_REGEX),
@@ -163,6 +171,9 @@ SHOW_SCHEMA = vol.Schema(
         vol.Optional(ATTR_OPACITY): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional(ATTR_TRANSPARENT): cv.boolean,
         vol.Optional(ATTR_BRING_TO_FRONT): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_LIVE_BADGE_POSITION): vol.In(LIVE_BADGE_POSITIONS),
         vol.Optional(ATTR_ANIMATION): vol.In(ANIMATIONS),
         vol.Optional(ATTR_STACK): vol.In(STACKS),
         vol.Optional(ATTR_SOUND): cv.string,
@@ -358,6 +369,19 @@ def build_device_payload(
     # app >= 0.24.0: a redraw opens on top of the other popups
     if data.get(ATTR_BRING_TO_FRONT):
         payload["bringToFront"] = True
+    # newer apps (older ones ignore it): a LIVE pill over the stream once it plays
+    if data.get(ATTR_LIVE_BADGE):
+        payload["liveBadge"] = True
+        if color := data.get(ATTR_LIVE_BADGE_COLOR):
+            payload["liveBadgeColor"] = color
+        if position := data.get(ATTR_LIVE_BADGE_POSITION):
+            payload["liveBadgePosition"] = position
+    # newer apps (older ones ignore it): media edge to edge, text and buttons padded
+    if data.get(ATTR_MEDIA_FULL_BLEED):
+        payload["mediaFullBleed"] = True
+    # newer apps: buttons at the end of the title/message row instead of below it
+    if data.get(ATTR_BUTTONS_INLINE):
+        payload["buttonsInline"] = True
     animation = data.get(ATTR_ANIMATION)
     if animation is None:
         animation = opts.get(CONF_DEFAULT_ANIMATION)

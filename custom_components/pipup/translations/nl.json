@@ -385,6 +385,14 @@
           "name": "Audio dempen",
           "description": "Dempt audio in video/web-streams. Zonder waarde geldt de apparaat-standaard (integratie-instellingen; audio kan het beeld op sommige TV’s bevriezen)."
         },
+        "media_full_bleed": {
+          "name": "Media tot de rand",
+          "description": "Laat de video of afbeelding van rand tot rand over de bovenkant van de popup lopen, met de bovenhoeken afgerond zoals de popup; titel, bericht en knoppen houden hun opvulling. Oudere apps negeren dit."
+        },
+        "buttons_inline": {
+          "name": "Knoppen in de regel",
+          "description": "Zet de knoppen aan het eind van de titel-/berichtregel in plaats van op een eigen regel eronder, bijvoorbeeld één compacte ✕. Oudere apps negeren dit."
+        },
         "tts": {
           "name": "Tekst uitspreken",
           "description": "Tekst die op de TV wordt uitgesproken wanneer de popup verschijnt (app 0.2.5 of nieuwer)."
@@ -492,6 +500,18 @@
         "bring_to_front": {
           "name": "Bovenop hertekenen",
           "description": "Alleen als een popup met dit ID al op de tv staat: teken de nieuwe bovenop de andere popups in plaats van op de oude plek (app 0.24.0 of nieuwer)."
+        },
+        "live_badge": {
+          "name": "Live-badge",
+          "description": "Toon een Live-label op een camera- of videopopup zodra de stream speelt (nooit op de stilstaande afbeelding); oudere apps negeren dit."
+        },
+        "live_badge_color": {
+          "name": "Kleur live-badge",
+          "description": "Kleur van het Live-label als #RRGGBB of #AARRGGBB; standaard amber."
+        },
+        "live_badge_position": {
+          "name": "Positie live-badge",
+          "description": "Hoek van de video voor het Live-label; standaard rechtsonder."
         }
       }
     },

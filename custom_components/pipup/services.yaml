@@ -40,6 +40,12 @@ show:
     muted:
       selector:
         boolean:
+    media_full_bleed:
+      selector:
+        boolean:
+    buttons_inline:
+      selector:
+        boolean:
     padding:
       selector:
         number:
@@ -60,6 +66,21 @@ show:
     bring_to_front:
       selector:
         boolean:
+    live_badge:
+      selector:
+        boolean:
+    live_badge_color:
+      example: "#FFA500"
+      selector:
+        text:
+    live_badge_position:
+      selector:
+        select:
+          options:
+            - top_left
+            - top_right
+            - bottom_left
+            - bottom_right
     button_size:
       selector:
         number:
