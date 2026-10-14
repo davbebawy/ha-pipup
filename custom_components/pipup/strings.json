@@ -359,7 +359,7 @@
         },
         "media_height": {
           "name": "Media height",
-          "description": "Web view height in pixels (default 360)."
+          "description": "Media height in pixels: the web/WHEP view height (default 360), and for a camera or video popup the box height until the stream reports its own shape, so an anamorphic camera snapshot shows correctly; older apps ignore it."
         },
         "title_color": {
           "name": "Title color",
@@ -384,6 +384,14 @@
         "muted": {
           "name": "Mute audio",
           "description": "Mutes audio in video/web streams. When omitted, the device default applies (integration settings; audio can freeze video on some TVs)."
+        },
+        "media_full_bleed": {
+          "name": "Full-bleed media",
+          "description": "Run the video or image edge to edge across the top of the popup, its top corners rounded with the popup; title, message and buttons keep the padding. Older apps ignore it."
+        },
+        "buttons_inline": {
+          "name": "Inline buttons",
+          "description": "Put the buttons at the end of the title/message row instead of on their own row below it, e.g. a single compact ✕. Older apps ignore it."
         },
         "tts": {
           "name": "Speak text",
@@ -449,6 +457,26 @@
           "name": "Button size",
           "description": "Button text size in sp; padding scales along, so popups with buttons can be small (app 0.19.0 or newer). Omit for the classic look."
         },
+        "button_color": {
+          "name": "Button color",
+          "description": "Fill of an unfocused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic look."
+        },
+        "button_focus_color": {
+          "name": "Button focus color",
+          "description": "Fill of the focused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic blue."
+        },
+        "button_text_color": {
+          "name": "Button text color",
+          "description": "Button label color as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for white."
+        },
+        "button_border_color": {
+          "name": "Button border color",
+          "description": "Button outline color, focused and unfocused, as #RRGGBB or #AARRGGBB; older apps ignore it."
+        },
+        "button_corner_radius": {
+          "name": "Button corner radius",
+          "description": "Button corner radius in pixels; 0 gives square corners, a large value a pill. Older apps ignore it."
+        },
         "animation": {
           "name": "Animation",
           "description": "Entrance animation, reversed when the popup expires naturally. An update-in-place of the same popup does not re-animate (app 0.19.0 or newer)."
@@ -472,6 +500,18 @@
         "bring_to_front": {
           "name": "Redraw on top",
           "description": "Only when a popup with this ID is already on the TV: draw the new one on top of the other popups instead of in its old place (app 0.24.0 or newer)."
+        },
+        "live_badge": {
+          "name": "Live badge",
+          "description": "Show a Live pill over a camera or video popup once the stream is playing (never over the still); older apps ignore it."
+        },
+        "live_badge_color": {
+          "name": "Live badge color",
+          "description": "Live pill color as #RRGGBB or #AARRGGBB; default amber."
+        },
+        "live_badge_position": {
+          "name": "Live badge position",
+          "description": "Corner of the video for the Live pill; default bottom right."
         }
       }
     },

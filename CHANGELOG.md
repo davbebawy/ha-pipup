@@ -9,6 +9,18 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 
 ## [Unreleased]
 
+## [v1.27.0] — 2026-10-14 (camera popup look, button style, video height)
+All contributed by @pelkiegr (ha-pipup #42, #43, #44; app side PiPup #69-#71). *(app ≥ 0.28.0)*; every field
+is sent only when set and an older app ignores it.
+### Added
+- **`live_badge`**, `live_badge_color`, `live_badge_position`, **`media_full_bleed`** and **`buttons_inline`**
+  in `pipup.show` (#44): the camera popup look.
+- **`button_color`**, `button_focus_color`, `button_text_color`, `button_border_color`,
+  `button_corner_radius` (#43): button style.
+- **`media_height` now also applies to video popups** (`camera_entity` stream/mjpeg and `video_url`) as
+  `media.video.height` (#42). Only a per-call value is sent: the per-TV default (360 on existing setups)
+  would otherwise change every video popup's poster sizing.
+
 ## [v1.26.0] — 2026-10-14 (popup stacking)
 ### Added
 - **`stack: vertical | horizontal | none`** in `pipup.show` *(app ≥ 0.27.0)*: line a popup up with

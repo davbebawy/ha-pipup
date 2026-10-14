@@ -39,11 +39,22 @@ from .const import (
     ATTR_ANIMATION,
     ATTR_STACK,
     ATTR_BUTTON_SIZE,
+    ATTR_BUTTON_BORDER_COLOR,
+    ATTR_BUTTON_COLOR,
+    ATTR_BUTTON_CORNER_RADIUS,
+    ATTR_BUTTON_FOCUS_COLOR,
+    ATTR_BUTTON_TEXT_COLOR,
+    ATTR_LIVE_BADGE,
+    ATTR_LIVE_BADGE_COLOR,
+    ATTR_LIVE_BADGE_POSITION,
+    LIVE_BADGE_POSITIONS,
     ATTR_DISMISS_SCREENSAVER,
     ATTR_ICON,
     ATTR_ICON_POSITION,
     ATTR_ICON_WIDTH,
     ATTR_IMAGE_URL,
+    ATTR_BUTTONS_INLINE,
+    ATTR_MEDIA_FULL_BLEED,
     ATTR_MEDIA_HEIGHT,
     ATTR_MEDIA_WIDTH,
     ATTR_MESSAGE,
@@ -146,11 +157,23 @@ SHOW_SCHEMA = vol.Schema(
             vol.Coerce(int), vol.Range(min=1, max=2160)
         ),
         vol.Optional(ATTR_MUTED): cv.boolean,
+        vol.Optional(ATTR_MEDIA_FULL_BLEED): cv.boolean,
+        vol.Optional(ATTR_BUTTONS_INLINE): cv.boolean,
         vol.Optional(ATTR_BUTTON_SIZE): vol.All(vol.Coerce(float), vol.Range(min=4, max=96)),
+        vol.Optional(ATTR_BUTTON_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_FOCUS_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_TEXT_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_BORDER_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_CORNER_RADIUS): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=128)
+        ),
         vol.Optional(ATTR_PADDING): vol.All(vol.Coerce(int), vol.Range(min=0, max=256)),
         vol.Optional(ATTR_OPACITY): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional(ATTR_TRANSPARENT): cv.boolean,
         vol.Optional(ATTR_BRING_TO_FRONT): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_LIVE_BADGE_POSITION): vol.In(LIVE_BADGE_POSITIONS),
         vol.Optional(ATTR_ANIMATION): vol.In(ANIMATIONS),
         vol.Optional(ATTR_STACK): vol.In(STACKS),
         vol.Optional(ATTR_SOUND): cv.string,
@@ -327,6 +350,17 @@ def build_device_payload(
     # per-device default. "none" suppresses a default animation for one call.
     if (button_size := pick(ATTR_BUTTON_SIZE, CONF_DEFAULT_BUTTON_SIZE, None)):
         payload["buttonSize"] = button_size
+    # app >= 0.28.0 (older ones ignore it): button style; each part is sent only when set
+    for attr, key in (
+        (ATTR_BUTTON_COLOR, "buttonColor"),
+        (ATTR_BUTTON_FOCUS_COLOR, "buttonFocusColor"),
+        (ATTR_BUTTON_TEXT_COLOR, "buttonTextColor"),
+        (ATTR_BUTTON_BORDER_COLOR, "buttonBorderColor"),
+    ):
+        if color := data.get(attr):
+            payload[key] = color
+    if (radius := data.get(ATTR_BUTTON_CORNER_RADIUS)) is not None:
+        payload["buttonCornerRadius"] = radius
     if (padding := data.get(ATTR_PADDING)) is not None:
         payload["padding"] = padding
     # app >= 0.24.0: whole-popup alpha; an older app ignores it
@@ -335,6 +369,19 @@ def build_device_payload(
     # app >= 0.24.0: a redraw opens on top of the other popups
     if data.get(ATTR_BRING_TO_FRONT):
         payload["bringToFront"] = True
+    # app >= 0.28.0 (older ones ignore it): a LIVE pill over the stream once it plays
+    if data.get(ATTR_LIVE_BADGE):
+        payload["liveBadge"] = True
+        if color := data.get(ATTR_LIVE_BADGE_COLOR):
+            payload["liveBadgeColor"] = color
+        if position := data.get(ATTR_LIVE_BADGE_POSITION):
+            payload["liveBadgePosition"] = position
+    # app >= 0.28.0 (older ones ignore it): media edge to edge, text and buttons padded
+    if data.get(ATTR_MEDIA_FULL_BLEED):
+        payload["mediaFullBleed"] = True
+    # app >= 0.28.0: buttons at the end of the title/message row instead of below it
+    if data.get(ATTR_BUTTONS_INLINE):
+        payload["buttonsInline"] = True
     animation = data.get(ATTR_ANIMATION)
     if animation is None:
         animation = opts.get(CONF_DEFAULT_ANIMATION)
@@ -419,8 +466,16 @@ def build_device_payload(
     height = pick(ATTR_MEDIA_HEIGHT, CONF_DEFAULT_MEDIA_HEIGHT, 360)
     muted = data.get(ATTR_MUTED, opts.get(CONF_DEFAULT_MUTED, True))
 
+    # app >= 0.28.0 (older ones ignore it): an explicit per-call media_height fixes a video popup's box until the
+    # stream reports its display aspect, so an anamorphic camera snapshot (an NVR's 704x480
+    # still of a 4:3 picture) shows at the right shape. Only a per-call value is sent: the
+    # per-device default would change every existing video popup's poster sizing.
+    video_height = data.get(ATTR_MEDIA_HEIGHT)
+
     if stream_uri:
         payload["media"] = {"video": {"uri": stream_uri, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif web_uri:
         payload["media"] = {
             "web": {"uri": web_uri, "width": width, "height": height, "muted": muted}
@@ -443,6 +498,8 @@ def build_device_payload(
             payload["media"]["whep"]["transparent"] = True
     elif url := data.get(ATTR_VIDEO_URL):
         payload["media"] = {"video": {"uri": url, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif url := data.get(ATTR_IMAGE_URL):
         payload["media"] = {"image": {"uri": url, "width": width}}
 
