@@ -67,6 +67,29 @@ show:
           max: 96
           unit_of_measurement: sp
           mode: box
+    button_color:
+      example: "#40FFFFFF"
+      selector:
+        text:
+    button_focus_color:
+      example: "#66FFFFFF"
+      selector:
+        text:
+    button_text_color:
+      example: "#FFFFFF"
+      selector:
+        text:
+    button_border_color:
+      example: "#4DFFFFFF"
+      selector:
+        text:
+    button_corner_radius:
+      selector:
+        number:
+          min: 0
+          max: 128
+          unit_of_measurement: px
+          mode: box
     animation:
       selector:
         select:

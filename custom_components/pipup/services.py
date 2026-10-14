@@ -39,6 +39,11 @@ from .const import (
     ATTR_ANIMATION,
     ATTR_STACK,
     ATTR_BUTTON_SIZE,
+    ATTR_BUTTON_BORDER_COLOR,
+    ATTR_BUTTON_COLOR,
+    ATTR_BUTTON_CORNER_RADIUS,
+    ATTR_BUTTON_FOCUS_COLOR,
+    ATTR_BUTTON_TEXT_COLOR,
     ATTR_DISMISS_SCREENSAVER,
     ATTR_ICON,
     ATTR_ICON_POSITION,
@@ -147,6 +152,13 @@ SHOW_SCHEMA = vol.Schema(
         ),
         vol.Optional(ATTR_MUTED): cv.boolean,
         vol.Optional(ATTR_BUTTON_SIZE): vol.All(vol.Coerce(float), vol.Range(min=4, max=96)),
+        vol.Optional(ATTR_BUTTON_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_FOCUS_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_TEXT_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_BORDER_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_CORNER_RADIUS): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=128)
+        ),
         vol.Optional(ATTR_PADDING): vol.All(vol.Coerce(int), vol.Range(min=0, max=256)),
         vol.Optional(ATTR_OPACITY): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional(ATTR_TRANSPARENT): cv.boolean,
@@ -327,6 +339,17 @@ def build_device_payload(
     # per-device default. "none" suppresses a default animation for one call.
     if (button_size := pick(ATTR_BUTTON_SIZE, CONF_DEFAULT_BUTTON_SIZE, None)):
         payload["buttonSize"] = button_size
+    # newer apps (older ones ignore it): button style; each part is sent only when set
+    for attr, key in (
+        (ATTR_BUTTON_COLOR, "buttonColor"),
+        (ATTR_BUTTON_FOCUS_COLOR, "buttonFocusColor"),
+        (ATTR_BUTTON_TEXT_COLOR, "buttonTextColor"),
+        (ATTR_BUTTON_BORDER_COLOR, "buttonBorderColor"),
+    ):
+        if color := data.get(attr):
+            payload[key] = color
+    if (radius := data.get(ATTR_BUTTON_CORNER_RADIUS)) is not None:
+        payload["buttonCornerRadius"] = radius
     if (padding := data.get(ATTR_PADDING)) is not None:
         payload["padding"] = padding
     # app >= 0.24.0: whole-popup alpha; an older app ignores it

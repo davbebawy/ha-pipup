@@ -449,6 +449,26 @@
           "name": "Button size",
           "description": "Button text size in sp; padding scales along, so popups with buttons can be small (app 0.19.0 or newer). Omit for the classic look."
         },
+        "button_color": {
+          "name": "Button color",
+          "description": "Fill of an unfocused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic look."
+        },
+        "button_focus_color": {
+          "name": "Button focus color",
+          "description": "Fill of the focused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic blue."
+        },
+        "button_text_color": {
+          "name": "Button text color",
+          "description": "Button label color as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for white."
+        },
+        "button_border_color": {
+          "name": "Button border color",
+          "description": "Button outline color, focused and unfocused, as #RRGGBB or #AARRGGBB; older apps ignore it."
+        },
+        "button_corner_radius": {
+          "name": "Button corner radius",
+          "description": "Button corner radius in pixels; 0 gives square corners, a large value a pill. Older apps ignore it."
+        },
         "animation": {
           "name": "Animation",
           "description": "Entrance animation, reversed when the popup expires naturally. An update-in-place of the same popup does not re-animate (app 0.19.0 or newer)."

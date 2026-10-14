@@ -449,6 +449,26 @@
           "name": "Knopgrootte",
           "description": "Tekstgrootte van de knoppen in sp; de padding schaalt mee, zodat popups met knoppen klein kunnen (app 0.19.0 of nieuwer). Weglaten voor de klassieke look."
         },
+        "button_color": {
+          "name": "Knopkleur",
+          "description": "Vulkleur van een niet-geselecteerde knop als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor de klassieke stijl."
+        },
+        "button_focus_color": {
+          "name": "Knopkleur bij focus",
+          "description": "Vulkleur van de geselecteerde knop als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor het klassieke blauw."
+        },
+        "button_text_color": {
+          "name": "Tekstkleur knop",
+          "description": "Kleur van de knoptekst als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor wit."
+        },
+        "button_border_color": {
+          "name": "Randkleur knop",
+          "description": "Kleur van de knoprand, met en zonder focus, als #RRGGBB of #AARRGGBB; oudere apps negeren dit."
+        },
+        "button_corner_radius": {
+          "name": "Hoekradius knop",
+          "description": "Hoekradius van de knoppen in pixels; 0 geeft vierkante hoeken, een grote waarde een pil. Oudere apps negeren dit."
+        },
         "animation": {
           "name": "Animatie",
           "description": "Verschijn-animatie, omgekeerd afgespeeld als de popup vanzelf afloopt. Een update-in-place van dezelfde popup animeert niet opnieuw (app 0.19.0 of nieuwer)."
