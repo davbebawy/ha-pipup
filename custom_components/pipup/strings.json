@@ -359,7 +359,7 @@
         },
         "media_height": {
           "name": "Media height",
-          "description": "Web view height in pixels (default 360)."
+          "description": "Media height in pixels: the web/WHEP view height (default 360), and for a camera or video popup the box height until the stream reports its own shape, so an anamorphic camera snapshot shows correctly; older apps ignore it."
         },
         "title_color": {
           "name": "Title color",

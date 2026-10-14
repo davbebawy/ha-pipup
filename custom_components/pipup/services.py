@@ -419,8 +419,16 @@ def build_device_payload(
     height = pick(ATTR_MEDIA_HEIGHT, CONF_DEFAULT_MEDIA_HEIGHT, 360)
     muted = data.get(ATTR_MUTED, opts.get(CONF_DEFAULT_MUTED, True))
 
+    # newer apps (older ones ignore it): an explicit per-call media_height fixes a video popup's box until the
+    # stream reports its display aspect, so an anamorphic camera snapshot (an NVR's 704x480
+    # still of a 4:3 picture) shows at the right shape. Only a per-call value is sent: the
+    # per-device default would change every existing video popup's poster sizing.
+    video_height = data.get(ATTR_MEDIA_HEIGHT)
+
     if stream_uri:
         payload["media"] = {"video": {"uri": stream_uri, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif web_uri:
         payload["media"] = {
             "web": {"uri": web_uri, "width": width, "height": height, "muted": muted}
@@ -443,6 +451,8 @@ def build_device_payload(
             payload["media"]["whep"]["transparent"] = True
     elif url := data.get(ATTR_VIDEO_URL):
         payload["media"] = {"video": {"uri": url, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif url := data.get(ATTR_IMAGE_URL):
         payload["media"] = {"image": {"uri": url, "width": width}}
 

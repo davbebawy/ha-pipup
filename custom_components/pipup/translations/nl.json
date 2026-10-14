@@ -359,7 +359,7 @@
         },
         "media_height": {
           "name": "Mediahoogte",
-          "description": "Hoogte van de webview in pixels (standaard 360)."
+          "description": "Mediahoogte in pixels: de hoogte van de web-/WHEP-weergave (standaard 360), en bij een camera- of videopopup de hoogte van het kader totdat de stream zijn eigen verhouding doorgeeft, zodat een anamorfe camerasnapshot goed wordt weergegeven; oudere apps negeren dit."
         },
         "title_color": {
           "name": "Titelkleur",
