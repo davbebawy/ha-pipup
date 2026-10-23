@@ -302,6 +302,20 @@
         "vertical": "Verticaal",
         "horizontal": "Horizontaal"
       }
+    },
+    "key": {
+      "options": {
+        "play_pause": "Afspelen/pauzeren",
+        "play": "Afspelen",
+        "pause": "Pauzeren",
+        "stop": "Stoppen",
+        "next": "Volgende",
+        "previous": "Vorige",
+        "rewind": "Terugspoelen",
+        "fast_forward": "Vooruitspoelen",
+        "home": "Home",
+        "back": "Terug"
+      }
     }
   },
   "services": {
@@ -512,6 +526,22 @@
         "live_badge_position": {
           "name": "Positie live-badge",
           "description": "Hoek van de video voor het Live-label; standaard rechtsonder."
+        },
+        "grid": {
+          "name": "Cameramuur",
+          "description": "Tot 9 WHEP-streams in één popup (app 0.29.0 of nieuwer): een lijst WHEP-URL's, of items met whep_url, label en poster_url. Allemaal van dezelfde server. media_width/media_height bepalen de maat van het hele raster."
+        },
+        "grid_columns": {
+          "name": "Rasterkolommen",
+          "description": "Aantal kolommen. Leeg = automatisch (2 tot en met 4 tegels, daarboven 3)."
+        },
+        "grid_fullscreen": {
+          "name": "Raster schermvullend",
+          "description": "Laat de cameramuur het hele scherm vullen. Zonder eigen positie of padding staat de popup gecentreerd en van rand tot rand."
+        },
+        "grid_labels": {
+          "name": "Rasterlabels",
+          "description": "Toon het label van elke tegel."
         }
       }
     },
@@ -542,6 +572,34 @@
     "sync": {
       "name": "Synchroniseren",
       "description": "Leest nu de status van de gekozen PiPup-apparaten en stuurt de push-webhook opnieuw naar de app."
+    },
+    "launch_app": {
+      "name": "App starten",
+      "description": "Start een app op de tv of opent een deeplink (app 0.29.0 of nieuwer). Een slapend scherm wordt eerst gewekt.",
+      "fields": {
+        "package": {
+          "name": "Pakket",
+          "description": "Android-pakketnaam, bijv. com.netflix.ninja. De bronnenlijst van de mediaspeler toont de geïnstalleerde apps."
+        },
+        "uri": {
+          "name": "Link",
+          "description": "Deeplink om te openen, bijv. een YouTube-URL. Met een pakket erbij opent alleen die app hem."
+        },
+        "wake": {
+          "name": "Scherm wekken",
+          "description": "Zet een slapend scherm eerst aan."
+        }
+      }
+    },
+    "send_key": {
+      "name": "Toets sturen",
+      "description": "Stuurt een mediatoets naar de app die speelt, of home/terug (die hebben de toegankelijkheidsdienst nodig). App 0.29.0 of nieuwer.",
+      "fields": {
+        "key": {
+          "name": "Toets",
+          "description": "De toets om te sturen."
+        }
+      }
     }
   },
   "issues": {

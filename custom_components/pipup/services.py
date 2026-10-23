@@ -81,6 +81,19 @@ from .const import (
     ATTR_VIDEO_URL,
     ATTR_WEB_URL,
     ATTR_WHEP_URL,
+    ATTR_GRID,
+    ATTR_GRID_COLUMNS,
+    ATTR_GRID_FULLSCREEN,
+    ATTR_GRID_LABELS,
+    ATTR_KEY,
+    ATTR_PACKAGE,
+    ATTR_URI,
+    ATTR_WAKE,
+    CONTROL_MIN_APP_VERSION,
+    GRID_MAX_TILES,
+    KEYS,
+    SERVICE_LAUNCH_APP,
+    SERVICE_SEND_KEY,
     BUTTON_TOKEN_TTL,
     CAMERA_MODE_MJPEG,
     CAMERA_MODE_SNAPSHOT,
@@ -129,6 +142,23 @@ COLOR_REGEX = r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$|^#[0-9a-fA-F]{8}$"
 
 # NB: geen schema-defaults voor duration/position/muted e.d. — een niet
 # meegegeven veld valt terug op de per-apparaat default (options flow).
+def _grid_tile(value: Any) -> dict[str, str]:
+    """One camera-wall tile: a WHEP URL, or {whep_url, label, poster_url}."""
+    if isinstance(value, str):
+        value = {"whep_url": value}
+    if not isinstance(value, dict):
+        raise vol.Invalid("a grid tile is a WHEP URL or a mapping with whep_url")
+    url = value.get("whep_url") or value.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise vol.Invalid("a grid tile needs whep_url")
+    tile = {"uri": url.strip()}
+    if label := value.get("label"):
+        tile["label"] = str(label)
+    if poster := value.get("poster_url") or value.get("poster"):
+        tile["poster"] = str(poster)
+    return tile
+
+
 SHOW_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TITLE): cv.string,
@@ -149,6 +179,12 @@ SHOW_SCHEMA = vol.Schema(
         vol.Optional(ATTR_VIDEO_URL): cv.string,
         vol.Optional(ATTR_WEB_URL): cv.string,
         vol.Optional(ATTR_WHEP_URL): cv.string,
+        vol.Optional(ATTR_GRID): vol.All(
+            cv.ensure_list, [_grid_tile], vol.Length(min=1, max=GRID_MAX_TILES)
+        ),
+        vol.Optional(ATTR_GRID_COLUMNS): vol.All(vol.Coerce(int), vol.Range(min=1, max=GRID_MAX_TILES)),
+        vol.Optional(ATTR_GRID_FULLSCREEN): cv.boolean,
+        vol.Optional(ATTR_GRID_LABELS): cv.boolean,
         vol.Optional(ATTR_POSTER_URL): cv.string,
         vol.Optional(ATTR_MEDIA_WIDTH): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=3840)
@@ -221,6 +257,20 @@ FIX_PERMISSION_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_PERMISSION, default="app"): vol.In(PERMISSIONS),
     },
+    extra=vol.ALLOW_EXTRA,
+)
+
+LAUNCH_APP_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_PACKAGE): vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_.]{1,255}$")),
+        vol.Optional(ATTR_URI): cv.string,
+        vol.Optional(ATTR_WAKE, default=True): cv.boolean,
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+SEND_KEY_SCHEMA = vol.Schema(
+    {vol.Required(ATTR_KEY): vol.In(KEYS)},
     extra=vol.ALLOW_EXTRA,
 )
 
@@ -488,6 +538,28 @@ def build_device_payload(
         # transparent body shows the TV behind it
         if data.get(ATTR_TRANSPARENT):
             payload["media"]["web"]["transparent"] = True
+    elif tiles := data.get(ATTR_GRID):
+        # app >= 0.29.0: a camera wall, one WHEP stream per tile; media_width/height size
+        # the whole grid, grid_fullscreen fills the screen
+        grid: dict[str, Any] = {
+            "items": tiles,
+            "width": data.get(ATTR_MEDIA_WIDTH) or 1280,
+            "height": data.get(ATTR_MEDIA_HEIGHT) or 720,
+            "muted": muted,
+        }
+        if (columns := data.get(ATTR_GRID_COLUMNS)) is not None:
+            grid["columns"] = columns
+        if data.get(ATTR_GRID_LABELS) is False:
+            grid["labels"] = False
+        if data.get(ATTR_GRID_FULLSCREEN):
+            grid["fullscreen"] = True
+            # a wall is meant edge to edge: centred and without the popup margin,
+            # unless the call says otherwise
+            if ATTR_POSITION not in data:
+                payload["position"] = POSITIONS["center"]
+            if ATTR_PADDING not in data:
+                payload["padding"] = 0
+        payload["media"] = {"grid": grid}
     elif url := data.get(ATTR_WHEP_URL):
         # app >= 0.25.0: the app negotiates WebRTC with the endpoint itself, without
         # loading the server's player page (go2rtc: http://host:1984/api/webrtc?src=<name>)
@@ -754,7 +826,8 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             payload = build_device_payload(data, opts, stream_uri, web_uri, callback_url, poster_uri)
             if unsupported := unsupported_media(payload, app_version):
                 return (
-                    f"{coordinator.config_entry.title}: {unsupported[0]}_url needs "
+                    f"{coordinator.config_entry.title}: "
+                    f"{unsupported[0] if unsupported[0] == 'grid' else unsupported[0] + '_url'} needs "
                     f"PiPup app {unsupported[1]} or newer (this TV runs {app_version})"
                 )
             try:
@@ -804,6 +877,49 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             )
         )
 
+    def _control_unsupported(coordinator) -> str | None:
+        """Why this TV cannot take TV-control calls, or None."""
+        data = coordinator.data or {}
+        if isinstance(data.get("control"), dict):
+            return None
+        version = data.get("version")
+        if version and not _needs_newer_app(CONTROL_MIN_APP_VERSION, version):
+            return None  # new enough; /state just not read since the update
+        return (
+            f"{coordinator.config_entry.title}: TV control needs PiPup app "
+            f"{CONTROL_MIN_APP_VERSION} or newer (this TV runs {version or 'unknown'})"
+        )
+
+    async def _control_on_all(call: ServiceCall, action) -> None:
+        coordinators = await _coordinators_for_call(hass, call)
+
+        async def _one(coordinator) -> str | None:
+            if reason := _control_unsupported(coordinator):
+                return reason
+            try:
+                await action(coordinator.client)
+                await _refresh_unless_pushed(coordinator)
+            except PiPupError as err:
+                return f"{coordinator.config_entry.title}: {err}"
+            return None
+
+        _raise_errors(
+            await asyncio.gather(*(_one(c) for c in coordinators), return_exceptions=True)
+        )
+
+    async def handle_launch_app(call: ServiceCall) -> None:
+        package = call.data.get(ATTR_PACKAGE)
+        uri = call.data.get(ATTR_URI)
+        if not package and not uri:
+            raise HomeAssistantError("launch_app needs a package and/or a uri")
+        await _control_on_all(
+            call, lambda client: client.launch(package=package, uri=uri, wake=call.data[ATTR_WAKE])
+        )
+
+    async def handle_send_key(call: ServiceCall) -> None:
+        key = call.data[ATTR_KEY]
+        await _control_on_all(call, lambda client: client.key(key))
+
     async def handle_sync(call: ServiceCall) -> None:
         """Read /state now on the targeted TV(s) and re-send the push webhook."""
         coordinators = await _coordinators_for_call(hass, call)
@@ -849,4 +965,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SYNC, handle_sync, schema=vol.Schema({}, extra=vol.ALLOW_EXTRA)
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_LAUNCH_APP, handle_launch_app, schema=LAUNCH_APP_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SEND_KEY, handle_send_key, schema=SEND_KEY_SCHEMA
     )

@@ -1,0 +1,187 @@
+blueprint:
+  name: PiPup – appliance done, card on the TV
+  description: >-
+    Shows a card on your TVs when an appliance with a power meter (washing machine,
+    dryer, dishwasher) has finished: its power went above the "running" threshold
+    for a while, and then stayed below the "done" threshold. A helper (toggle)
+    remembers that the appliance was running, so a Home Assistant restart halfway
+    through a programme does not lose the finish.
+  domain: automation
+  source_url: https://github.com/mhoogenbosch/ha-pipup/blob/main/blueprints/automation/pipup_appliance_done.yaml
+  input:
+    power_sensor:
+      name: Power sensor
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    running_flag:
+      name: Running helper
+      description: >-
+        A toggle helper (input_boolean) of its own for this appliance. Create one
+        under Settings > Devices & services > Helpers; this automation switches it.
+      selector:
+        entity:
+          domain: input_boolean
+    running_watts:
+      name: Running above
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 3000
+          unit_of_measurement: W
+          mode: box
+    running_minutes:
+      name: Running for at least
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: min
+    done_watts:
+      name: Done below
+      description: Many machines draw a few watts after the programme; keep this above that.
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.5
+          unit_of_measurement: W
+          mode: box
+    done_minutes:
+      name: Done after
+      description: How long the power must stay low; a washing machine pauses between rinses.
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: min
+    tvs:
+      name: TVs
+      selector:
+        device:
+          integration: pipup
+          multiple: true
+    title:
+      name: Title
+      default: Washing machine
+      selector:
+        text:
+    message:
+      name: Message
+      default: The washing is done.
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: Optional full image URL shown beside the text.
+      default: ""
+      selector:
+        text:
+    duration:
+      name: Duration
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 3600
+          unit_of_measurement: s
+          mode: box
+    only_when_on:
+      name: Only when a TV screen is on
+      description: >-
+        Skip the card when every TV is in standby (the card would not be seen). Uses
+        each TV's PiPup screen switch.
+      default: false
+      selector:
+        boolean:
+
+# queued: a finish right after a start (short programme) is not dropped
+mode: queued
+
+variables:
+  tvs: !input tvs
+  flag: !input running_flag
+  only_when_on: !input only_when_on
+  # the TV's PiPup screen switch is the one switch with a can_sleep attribute
+  screens_on: >-
+    {{ tvs | map('device_entities') | sum(start=[]) | select('match', '^switch\\.')
+       | expand | selectattr('attributes.can_sleep', 'defined')
+       | selectattr('state', 'eq', 'on') | list | count > 0 }}
+  power_entity: !input power_sensor
+  done_below: !input done_watts
+  done_after: !input done_minutes
+  title_text: !input title
+  message_text: !input message
+  icon_url: !input icon
+  duration_s: !input duration
+  payload: >-
+    {% set p = {
+      'title': title_text, 'message': message_text,
+      'duration': duration_s | int, 'urgency': 'info', 'stack': 'vertical',
+      'show_progress': true, 'popup_id': 'appliance_' ~ (flag | replace('input_boolean.', '')),
+    } %}
+    {% if icon_url %}{% set p = dict(p, icon=icon_url) %}{% endif %}
+    {{ p }}
+
+triggers:
+  - trigger: numeric_state
+    id: running
+    entity_id: !input power_sensor
+    above: !input running_watts
+    for:
+      minutes: !input running_minutes
+  - trigger: numeric_state
+    id: done
+    entity_id: !input power_sensor
+    below: !input done_watts
+    for:
+      minutes: !input done_minutes
+  # Safety net: a restart (or an unavailable blip) during the quiet period resets the
+  # "for" timer of the trigger above, and a finish would be missed. Every 5 minutes this
+  # checks the state itself: still marked running, power low, and low for long enough.
+  - trigger: time_pattern
+    id: check
+    minutes: /5
+  - trigger: homeassistant
+    id: check
+    event: start
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: running
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input running_flag
+      - conditions:
+          - condition: state
+            entity_id: !input running_flag
+            state: "on"
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: done
+              - condition: template
+                value_template: >-
+                  {{ trigger.id == 'check'
+                     and has_value(power_entity)
+                     and states(power_entity) | float < done_below | float
+                     and now() - (expand(power_entity) | first).last_changed
+                         > timedelta(minutes=done_after | int) }}
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input running_flag
+          - condition: template
+            value_template: "{{ not only_when_on or screens_on }}"
+          - action: pipup.show
+            target:
+              device_id: "{{ tvs }}"
+            data: "{{ payload }}"

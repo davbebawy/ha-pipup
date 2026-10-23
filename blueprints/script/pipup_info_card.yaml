@@ -1,0 +1,143 @@
+blueprint:
+  name: PiPup – info card on the TV
+  description: >-
+    A ready-made info card for your TVs: title, message, an optional icon and an
+    urgency colour. Create one script from this blueprint, then call it from any
+    automation with only the text that changes, e.g. the weather, the next calendar
+    item or "the washing machine is done". The look (position, duration, stacking,
+    sound) is set once here, so every card on the TV looks the same.
+  domain: script
+  source_url: https://github.com/mhoogenbosch/ha-pipup/blob/main/blueprints/script/pipup_info_card.yaml
+  input:
+    tvs:
+      name: TVs
+      description: The PiPup TVs that show the card.
+      selector:
+        device:
+          integration: pipup
+          multiple: true
+    position:
+      name: Position
+      default: top_right
+      selector:
+        select:
+          options:
+            - top_right
+            - top_left
+            - bottom_right
+            - bottom_left
+            - top_center
+            - bottom_center
+            - center_left
+            - center_right
+            - center
+    duration:
+      name: Default duration
+      description: Seconds on screen, unless the call gives its own duration.
+      default: 15
+      selector:
+        number:
+          min: 3
+          max: 600
+          unit_of_measurement: s
+          mode: box
+    stack:
+      name: Stacking
+      description: >-
+        Line cards up instead of drawing them over each other when several are on
+        screen at the same position (app 0.27.0 or newer).
+      default: vertical
+      selector:
+        select:
+          options:
+            - vertical
+            - horizontal
+            - none
+    sound:
+      name: Sound
+      description: Play the built-in chime when a card appears.
+      default: false
+      selector:
+        boolean:
+    show_progress:
+      name: Countdown bar
+      default: true
+      selector:
+        boolean:
+
+fields:
+  title:
+    name: Title
+    example: Weather
+    selector:
+      text:
+  message:
+    name: Message
+    required: true
+    example: 14 °C, light rain
+    selector:
+      text:
+        multiline: true
+  icon:
+    name: Icon
+    description: Full image URL shown beside the text, e.g. http://192.168.1.10:8123/local/icons/rain.png (the TV loads it itself, so no relative path).
+    selector:
+      text:
+  urgency:
+    name: Urgency
+    description: Coloured border; empty = none.
+    selector:
+      select:
+        options:
+          - info
+          - warning
+          - critical
+  duration:
+    name: Duration
+    description: Seconds on screen; empty = the blueprint default.
+    selector:
+      number:
+        min: 3
+        max: 600
+        unit_of_measurement: s
+        mode: box
+  card_id:
+    name: Card ID
+    description: >-
+      Give the same ID to replace a card that is still on screen (e.g. a weather
+      card refreshed every 10 minutes) instead of adding a second one.
+    selector:
+      text:
+
+# queued: two cards sent in the same second both arrive; neither is dropped
+mode: queued
+max: 10
+
+variables:
+  tvs: !input tvs
+  default_position: !input position
+  default_duration: !input duration
+  default_stack: !input stack
+  with_sound: !input sound
+  with_progress: !input show_progress
+  payload: >-
+    {% set p = {
+      'message': message,
+      'position': default_position,
+      'duration': (duration | default(default_duration, true)) | int,
+      'stack': default_stack,
+      'show_progress': with_progress,
+    } %}
+    {% if title | default('', true) %}{% set p = dict(p, title=title) %}{% endif %}
+    {% if urgency | default('', true) %}{% set p = dict(p, urgency=urgency) %}{% endif %}
+    {% if card_id | default('', true) %}{% set p = dict(p, popup_id=card_id) %}{% endif %}
+    {% if with_sound %}{% set p = dict(p, sound='default') %}{% endif %}
+    {% set i = icon | default('', true) | string %}
+    {% if i %}{% set p = dict(p, icon=i) %}{% endif %}
+    {{ p }}
+
+sequence:
+  - action: pipup.show
+    target:
+      device_id: "{{ tvs }}"
+    data: "{{ payload }}"

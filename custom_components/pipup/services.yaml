@@ -230,6 +230,25 @@ show:
     whep_url:
       selector:
         text:
+    grid:
+      example: >-
+        [{"whep_url": "http://go2rtc:1984/api/webrtc?src=doorbell", "label": "Doorbell"},
+        {"whep_url": "http://go2rtc:1984/api/webrtc?src=garden", "label": "Garden"}]
+      selector:
+        object:
+    grid_columns:
+      selector:
+        number:
+          min: 1
+          max: 9
+          mode: box
+    grid_fullscreen:
+      selector:
+        boolean:
+    grid_labels:
+      default: true
+      selector:
+        boolean:
     media_width:
       selector:
         number:
@@ -304,3 +323,45 @@ fix_permission:
             - admin
             - accessibility
           translation_key: permission
+
+launch_app:
+  target:
+    entity:
+      integration: pipup
+      domain: media_player
+  fields:
+    package:
+      example: com.netflix.ninja
+      selector:
+        text:
+    uri:
+      example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+      selector:
+        text:
+    wake:
+      default: true
+      selector:
+        boolean:
+
+send_key:
+  target:
+    entity:
+      integration: pipup
+      domain: media_player
+  fields:
+    key:
+      required: true
+      selector:
+        select:
+          translation_key: key
+          options:
+            - play_pause
+            - play
+            - pause
+            - stop
+            - next
+            - previous
+            - rewind
+            - fast_forward
+            - home
+            - back
