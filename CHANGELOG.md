@@ -9,6 +9,19 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 
 ## [Unreleased]
 
+## [v1.28.0] — 2026-10-23 (TV control, camera wall, blueprints)
+### Added
+- **Media player per TV** *(app ≥ 0.29.0)*: the installed apps as sources (select = start), media keys
+  for play/pause/stop/next/previous, volume up/down/mute, a volume slider where the volume is not fixed
+  (HDMI-CEC), on/off through the screen routes. Created only when the app reports TV control.
+- **`pipup.launch_app`** (package and/or deep link, `wake`) and **`pipup.send_key`** (media keys,
+  home, back) *(app ≥ 0.29.0)*; a TV on an older app gets an error naming the version it needs.
+- **`grid`** in `pipup.show` *(app ≥ 0.29.0)*: a camera wall of up to nine WHEP streams, with
+  `grid_columns`, `grid_fullscreen` (centred, no padding unless given) and `grid_labels`.
+- **Blueprints**: *Info card on the TV* (script) and *Appliance done* (automation, with a running
+  helper and a 5-minute safety net). Both tested in Home Assistant in the test suite.
+- English and Dutch labels for every new field.
+
 ## [v1.27.0] — 2026-10-14 (camera popup look, button style, video height)
 All contributed by @pelkiegr (ha-pipup #42, #43, #44; app side PiPup #69-#71). *(app ≥ 0.28.0)*; every field
 is sent only when set and an older app ignores it.

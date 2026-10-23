@@ -39,6 +39,10 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     PiPup, so this no longer needs a second ADB/CEC integration. Attributes `can_sleep` and
     `sleep_method` say what the device can actually do: turning **on** always works, turning **off**
     needs a one-time adb grant on the TV (see [screen on/off](#screen-onoff))
+  - **TV** media player (app ≥ 0.29.0) — a remote control without adb: the installed apps as
+    **sources** (select one to start it), play/pause/stop/next/previous as media keys to whatever app
+    is playing, volume up/down/mute, a volume slider where the box owns its volume, and on/off through
+    the screen routes. See [TV control](#tv-control)
   - **Permission problem** diagnostic binary sensor (app ≥ 0.7.0) — on when the app misses a
     permission it needs, with each grant as an attribute. Without the overlay app-op the TV accepts
     every popup with HTTP 200 and shows *nothing*, and `adb install -r` resets it, so this also
@@ -55,6 +59,11 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     the app's own permission diagnosis (which activity handles each settings screen, whether it is a
     vendor placeholder, whether a background launch is allowed, how the last attempt ended). That file
     is what to attach to a "the fix button does nothing" report
+- Actions **`pipup.launch_app`** (an app by package, or a deep link) and **`pipup.send_key`** (media
+  keys, home, back) — app ≥ 0.29.0
+- **Camera wall** in `pipup.show` with `grid` (app ≥ 0.29.0): up to nine WHEP streams in one popup, or
+  full screen. See [Camera wall](#camera-wall)
+- **Blueprints** for an info card and an "appliance done" card — see [Blueprints](#blueprints)
 - Action **`pipup.show`** — title/message/media popup with all PiPup fields, plus:
   - `duration: 0` → popup stays until dismissed or replaced
   - `popup_id` → re-sending the same id+content only extends the timer (stream keeps playing, no flicker)
@@ -232,6 +241,140 @@ naming the fix rather than failing silently.
 Because the app derives the screen state from `PowerManager.isInteractive`, which lags a poll behind
 a fresh wake, the switch trusts its own last command for up to 20 seconds and schedules an extra
 refresh — so it does not visibly bounce back after you flip it.
+
+### TV control
+
+With app ≥ 0.29.0 every TV gets a **media player** entity and two actions. Nothing to grant: it uses
+the same "display over other apps" permission popups already need.
+
+| | How |
+|---|---|
+| Start an app | `media_player.select_source` with the app's name (the source list is the installed TV apps), or `pipup.launch_app` with `package` |
+| Open a link | `pipup.launch_app` with `uri` (and optionally `package` to force the app) |
+| Play/pause, next, … | the media player's transport buttons, or `pipup.send_key` |
+| Home / back | `pipup.send_key` — needs the accessibility service on the TV (`install.sh --accessibility`) |
+| Volume | the media player's volume slider, up/down and mute |
+| On / off | the media player's power button (off needs the screen-off route, as for the Screen switch) |
+
+```yaml
+- action: pipup.launch_app
+  target:
+    entity_id: media_player.pipup_living_room
+  data:
+    uri: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+- action: pipup.send_key
+  target:
+    entity_id: media_player.pipup_living_room
+  data:
+    key: play_pause
+```
+
+What it cannot do: PiPup does not see which app is in front or what is playing (that needs usage
+access, a grant a TV has no screen for). The media player's state is therefore the screen (on/off),
+its **source** is only the app PiPup itself started last, and **play/pause** sends the toggle key
+because PiPup does not know which of the two applies. On a box whose volume belongs to the TV set or
+amplifier over HDMI-CEC (`volume_fixed: true`) the slider is hidden; up/down and mute are passed on.
+
+## Camera wall
+
+`grid` (app ≥ 0.29.0) puts up to nine WHEP streams in one popup. Each tile is a WHEP URL, or a
+mapping with `whep_url`, `label` and `poster_url`. `media_width`/`media_height` size the whole grid
+(default 1280×720); `grid_fullscreen: true` fills the screen, centred and edge to edge unless you give
+a `position` or `padding` yourself. `grid_columns` overrides the automatic layout (2 columns up to four
+tiles, 3 above) and `grid_labels: false` hides the captions.
+
+```yaml
+- action: pipup.show
+  target:
+    entity_id: binary_sensor.pipup_living_room_popup
+  data:
+    popup_id: camera_wall
+    duration: 120
+    grid_fullscreen: true
+    grid:
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=doorbell
+        label: Front door
+        poster_url: http://192.168.1.20:5000/api/doorbell/latest.jpg
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=driveway
+        label: Driveway
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=garden
+        label: Garden
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=shed
+        label: Shed
+```
+
+All tiles must come from the same go2rtc as the first one (go2rtc sends no CORS headers by default).
+Every tile is decoded on the TV, so on a small stick use the cameras' substreams. Close the wall with
+`pipup.dismiss` and the same `popup_id`.
+
+## Blueprints
+
+Two blueprints ship with the integration. Import them with the buttons, or paste the URL under
+*Settings → Automations & scenes → Blueprints → Import blueprint*.
+
+### Info card on the TV (script)
+
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmhoogenbosch%2Fha-pipup%2Fblob%2Fmain%2Fblueprints%2Fscript%2Fpipup_info_card.yaml)
+
+One script with the look of your info cards set once — TVs, position, default duration, stacking,
+chime, countdown bar. Call it with just the text that changes: `title`, `message`, and optionally
+`icon` (a full image URL), `urgency` (info/warning/critical), `duration` and `card_id` (the same id
+replaces a card that is still up instead of adding a second one). The examples below call it as
+`script.tv_info_card`.
+
+The weather when someone turns on the TV:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: switch.pipup_living_room_screen
+    to: "on"
+actions:
+  - action: script.tv_info_card
+    data:
+      card_id: weather
+      title: Weather
+      message: >-
+        {{ state_attr('weather.home', 'temperature') }} °C,
+        {{ states('weather.home') | replace('-', ' ') }}
+```
+
+Today's calendar in the morning:
+
+```yaml
+triggers:
+  - trigger: time
+    at: "07:30:00"
+actions:
+  - action: calendar.get_events
+    target:
+      entity_id: calendar.family
+    data:
+      duration: {hours: 16}
+    response_variable: agenda
+  - if: "{{ agenda['calendar.family'].events | count > 0 }}"
+    then:
+      - action: script.tv_info_card
+        data:
+          card_id: agenda
+          title: Today
+          duration: 45
+          message: >-
+            {% for e in agenda['calendar.family'].events %}
+            {{ as_timestamp(e.start) | timestamp_custom('%H:%M') if 'T' in e.start else 'All day' }}
+            · {{ e.summary }}
+            {% endfor %}
+```
+
+### Appliance done (automation)
+
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmhoogenbosch%2Fha-pipup%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpipup_appliance_done.yaml)
+
+A card on the TVs when the washing machine, dryer or dishwasher has finished, from its power meter:
+above *Running above* (default 10 W) for a couple of minutes marks it as running, then below *Done
+below* (3 W) for *Done after* (5 min) shows the card. Give it a toggle helper (`input_boolean`) of its
+own: that remembers "running" across a Home Assistant restart, and a 5-minute check catches a finish
+whose quiet period was interrupted by one. Optional: only show the card when a TV screen is on.
 
 ## Overlays
 

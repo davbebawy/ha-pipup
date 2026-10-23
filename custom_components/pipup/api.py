@@ -260,3 +260,84 @@ class PiPupClient:
             raise
         except (aiohttp.ClientError, TimeoutError) as err:
             raise PiPupError(f"Cannot reach PiPup at {self._base}: {err}") from err
+
+    async def apps(self) -> list[dict[str, Any]]:
+        """Launchable apps on the TV (app >= 0.29.0): package, label, tv."""
+        try:
+            async with self._session.get(
+                f"{self._base}/apps",
+                headers=_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 400:
+                    raise PiPupUnsupportedError("app has no /apps (needs >= 0.29.0)")
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise PiPupError(f"apps failed ({resp.status}): {body}")
+                data = await resp.json(content_type=None)
+                apps = data.get("apps") if isinstance(data, dict) else None
+                return [a for a in apps or [] if isinstance(a, dict) and a.get("package")]
+        except PiPupError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise PiPupError(f"Cannot reach PiPup at {self._base}: {err}") from err
+
+    async def launch(
+        self, package: str | None = None, uri: str | None = None, wake: bool = True
+    ) -> dict[str, Any]:
+        """Start an app or open a deep link (app >= 0.29.0)."""
+        params = {k: v for k, v in (("package", package), ("uri", uri)) if v}
+        if not wake:
+            params["wake"] = "false"
+        return await self._control("/launch", params)
+
+    async def key(self, key: str) -> dict[str, Any]:
+        """Send a media key, or home/back (app >= 0.29.0)."""
+        return await self._control("/key", {"key": key})
+
+    async def volume(
+        self,
+        level: int | None = None,
+        step: str | None = None,
+        mute: str | None = None,
+    ) -> dict[str, Any]:
+        """Set (level 0-100), step (up/down) or mute (on/off/toggle) the volume (app >= 0.29.0)."""
+        params: dict[str, str] = {}
+        if level is not None:
+            params["level"] = str(level)
+        elif step is not None:
+            params["step"] = step
+        elif mute is not None:
+            params["mute"] = mute
+        return await self._control("/volume", params)
+
+    async def _control(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        """POST a TV-control call; the app answers JSON with ok + message.
+
+        501 (this device cannot, e.g. a fixed volume) is raised as
+        PiPupUnsupportedError, every other failure as PiPupError with the app's message.
+        """
+        try:
+            async with self._session.post(
+                f"{self._base}{path}",
+                params=params or None,
+                headers=_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                text = await resp.text()
+                try:
+                    body = json.loads(text) if text else {}
+                except ValueError:
+                    body = {"message": text}
+                if not isinstance(body, dict):
+                    body = {"message": text}
+                if resp.status == 200:
+                    return body
+                message = body.get("message") or text
+                if resp.status == 501:
+                    raise PiPupUnsupportedError(message)
+                raise PiPupError(f"{path.lstrip('/')} failed ({resp.status}): {message}")
+        except PiPupError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise PiPupError(f"Cannot reach PiPup at {self._base}: {err}") from err

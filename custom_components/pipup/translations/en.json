@@ -302,6 +302,20 @@
         "vertical": "Vertical",
         "horizontal": "Horizontal"
       }
+    },
+    "key": {
+      "options": {
+        "play_pause": "Play/pause",
+        "play": "Play",
+        "pause": "Pause",
+        "stop": "Stop",
+        "next": "Next",
+        "previous": "Previous",
+        "rewind": "Rewind",
+        "fast_forward": "Fast forward",
+        "home": "Home",
+        "back": "Back"
+      }
     }
   },
   "services": {
@@ -512,6 +526,22 @@
         "live_badge_position": {
           "name": "Live badge position",
           "description": "Corner of the video for the Live pill; default bottom right."
+        },
+        "grid": {
+          "name": "Camera wall",
+          "description": "Up to 9 WHEP streams in one popup (app 0.29.0 or newer): a list of WHEP URLs, or of mappings with whep_url, label and poster_url. All from the same server. media_width/media_height size the whole grid."
+        },
+        "grid_columns": {
+          "name": "Grid columns",
+          "description": "Number of columns. Empty = automatic (2 for up to 4 tiles, 3 above)."
+        },
+        "grid_fullscreen": {
+          "name": "Grid full screen",
+          "description": "Fill the screen with the camera wall. Without an explicit position or padding the popup is centred and edge to edge."
+        },
+        "grid_labels": {
+          "name": "Grid labels",
+          "description": "Show each tile's label."
         }
       }
     },
@@ -542,6 +572,34 @@
     "sync": {
       "name": "Sync",
       "description": "Reads the state of the targeted PiPup device(s) now and re-sends the push webhook to the app."
+    },
+    "launch_app": {
+      "name": "Launch app",
+      "description": "Starts an app on the TV, or opens a deep link (app 0.29.0 or newer). A sleeping screen is woken first.",
+      "fields": {
+        "package": {
+          "name": "Package",
+          "description": "Android package name, e.g. com.netflix.ninja. The media player's source list shows the installed apps."
+        },
+        "uri": {
+          "name": "Link",
+          "description": "Deep link to open, e.g. a YouTube URL. With a package as well, only that app opens it."
+        },
+        "wake": {
+          "name": "Wake the screen",
+          "description": "Turn a sleeping screen on first."
+        }
+      }
+    },
+    "send_key": {
+      "name": "Send key",
+      "description": "Sends a media key to the app that is playing, or home/back (those need the accessibility service). App 0.29.0 or newer.",
+      "fields": {
+        "key": {
+          "name": "Key",
+          "description": "The key to send."
+        }
+      }
     }
   },
   "issues": {

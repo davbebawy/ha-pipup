@@ -54,6 +54,8 @@ SERVICE_SHOW: Final = "show"
 SERVICE_FIX_PERMISSION: Final = "fix_permission"
 SERVICE_DISMISS: Final = "dismiss"
 SERVICE_SYNC: Final = "sync"
+SERVICE_LAUNCH_APP: Final = "launch_app"
+SERVICE_SEND_KEY: Final = "send_key"
 
 ATTR_TITLE: Final = "title"
 ATTR_MESSAGE: Final = "message"
@@ -70,6 +72,22 @@ ATTR_VIDEO_URL: Final = "video_url"
 ATTR_WEB_URL: Final = "web_url"
 # app >= 0.25.0: WebRTC straight from a WHEP endpoint (go2rtc: /api/webrtc?src=<name>)
 ATTR_WHEP_URL: Final = "whep_url"
+# grid (app >= 0.29.0): a camera wall of WHEP streams
+ATTR_GRID: Final = "grid"
+ATTR_GRID_COLUMNS: Final = "grid_columns"
+ATTR_GRID_FULLSCREEN: Final = "grid_fullscreen"
+ATTR_GRID_LABELS: Final = "grid_labels"
+GRID_MAX_TILES: Final = 9
+# TV control (app >= 0.29.0)
+ATTR_PACKAGE: Final = "package"
+ATTR_URI: Final = "uri"
+ATTR_WAKE: Final = "wake"
+ATTR_KEY: Final = "key"
+KEYS: Final = [
+    "play_pause", "play", "pause", "stop", "next", "previous",
+    "rewind", "fast_forward", "home", "back",
+]
+CONTROL_MIN_APP_VERSION: Final = "0.29.0"
 ATTR_MEDIA_WIDTH: Final = "media_width"
 ATTR_MEDIA_HEIGHT: Final = "media_height"
 ATTR_MUTED: Final = "muted"
@@ -186,7 +204,7 @@ POSITION_MIN_APP_VERSION: Final = {
 }
 # Media types the app only understands from a given version on; an older app rejects the
 # whole /notify on an unknown media type.
-MEDIA_MIN_APP_VERSION: Final = {"whep": "0.25.0"}
+MEDIA_MIN_APP_VERSION: Final = {"whep": "0.25.0", "grid": "0.29.0"}
 # Overlays (1.20.0): named web popups pinned over the TV picture, one
 # config subentry each, with their settings as entities. Pages are a per-TV list in
 # the options, one "Name | URL" line each.
