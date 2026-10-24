@@ -85,6 +85,7 @@ from .const import (
     ATTR_GRID_COLUMNS,
     ATTR_GRID_FULLSCREEN,
     ATTR_GRID_LABELS,
+    ATTR_FULLSCREEN,
     ATTR_KEY,
     ATTR_PACKAGE,
     ATTR_URI,
@@ -185,6 +186,7 @@ SHOW_SCHEMA = vol.Schema(
         vol.Optional(ATTR_GRID_COLUMNS): vol.All(vol.Coerce(int), vol.Range(min=1, max=GRID_MAX_TILES)),
         vol.Optional(ATTR_GRID_FULLSCREEN): cv.boolean,
         vol.Optional(ATTR_GRID_LABELS): cv.boolean,
+        vol.Optional(ATTR_FULLSCREEN): cv.boolean,
         vol.Optional(ATTR_POSTER_URL): cv.string,
         vol.Optional(ATTR_MEDIA_WIDTH): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=3840)
@@ -392,6 +394,9 @@ def build_device_payload(
     }
     if popup_id := data.get(ATTR_POPUP_ID):
         payload["id"] = popup_id
+    # app >= 0.29.1 (older ones ignore it): a window over the whole display, bars included
+    if data.get(ATTR_FULLSCREEN):
+        payload["fullscreen"] = True
     if title := data.get(ATTR_TITLE):
         payload["title"] = title
     if message := data.get(ATTR_MESSAGE):
@@ -553,6 +558,7 @@ def build_device_payload(
             grid["labels"] = False
         if data.get(ATTR_GRID_FULLSCREEN):
             grid["fullscreen"] = True
+            payload["fullscreen"] = True
             # a wall is meant edge to edge: centred and without the popup margin,
             # unless the call says otherwise
             if ATTR_POSITION not in data:
