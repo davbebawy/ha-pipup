@@ -36,6 +36,7 @@ def test_grid_payload() -> None:
 def test_fullscreen_centres_without_padding_unless_given() -> None:
     payload = build_device_payload(SHOW_SCHEMA({"grid": [URL + "a"], "grid_fullscreen": True}), {}, None)
     assert payload["media"]["grid"]["fullscreen"] is True
+    assert payload["fullscreen"] is True
     assert payload["position"] == 4  # center
     assert payload["padding"] == 0
 
@@ -51,3 +52,9 @@ def test_grid_needs_app_0_29() -> None:
     payload = {"media": {"grid": {"items": []}}}
     assert unsupported_media(payload, "0.28.0") == ("grid", "0.29.0")
     assert unsupported_media(payload, "0.29.0") is None
+
+
+def test_fullscreen_flag_on_any_popup() -> None:
+    payload = build_device_payload(SHOW_SCHEMA({"web_url": "http://x/clock.html", "fullscreen": True}), {}, None)
+    assert payload["fullscreen"] is True
+    assert "fullscreen" not in build_device_payload(SHOW_SCHEMA({"message": "hi"}), {}, None)

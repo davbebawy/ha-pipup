@@ -8,6 +8,12 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
 ## [Unreleased]
+
+## [v1.28.1] — 2026-10-24 (full-screen popups)
+### Added
+- **`fullscreen`** in `pipup.show` *(app ≥ 0.29.1)*: the popup window covers the whole screen, system
+  bars included (PiPup #73). `grid_fullscreen` sets it too, so a camera wall is no longer clipped on a
+  device with system bars. No version gate: an older app ignores the field.
 ### Docs
 - Three examples with the new TV control and camera wall: doorbell (pause + camera wall), a dashboard button
   (app + volume) and bedtime (pause + info card).

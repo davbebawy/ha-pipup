@@ -542,6 +542,10 @@
         "grid_labels": {
           "name": "Grid labels",
           "description": "Show each tile's label."
+        },
+        "fullscreen": {
+          "name": "Full screen",
+          "description": "Cover the whole screen, status and navigation bars included, with the popup centred (app 0.29.1 or newer). Matters on devices with system bars (tablets, intercom panels); on a TV it looks the same. For a frameless page give padding 0 and border width 0."
         }
       }
     },

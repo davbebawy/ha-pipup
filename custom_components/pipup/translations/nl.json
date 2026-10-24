@@ -542,6 +542,10 @@
         "grid_labels": {
           "name": "Rasterlabels",
           "description": "Toon het label van elke tegel."
+        },
+        "fullscreen": {
+          "name": "Schermvullend",
+          "description": "Bedek het hele scherm, inclusief status- en navigatiebalk, met de popup gecentreerd (app 0.29.1 of nieuwer). Van belang op apparaten met systeembalken (tablets, intercompanelen); op een tv ziet het er hetzelfde uit. Voor een pagina zonder rand: padding 0 en randbreedte 0."
         }
       }
     },

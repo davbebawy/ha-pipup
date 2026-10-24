@@ -283,6 +283,11 @@ mapping with `whep_url`, `label` and `poster_url`. `media_width`/`media_height` 
 a `position` or `padding` yourself. `grid_columns` overrides the automatic layout (2 columns up to four
 tiles, 3 above) and `grid_labels: false` hides the captions.
 
+`fullscreen: true` (app ≥ 0.29.1) works on any popup: the window covers the whole screen, status and
+navigation bars included, with the popup centred. On a TV that looks the same as before; on a device
+with system bars (a tablet, an intercom panel) it is what lets a screen-sized page reach the edges.
+`grid_fullscreen` sets it for you.
+
 ```yaml
 - action: pipup.show
   target:

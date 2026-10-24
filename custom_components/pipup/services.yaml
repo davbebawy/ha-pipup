@@ -249,6 +249,9 @@ show:
       default: true
       selector:
         boolean:
+    fullscreen:
+      selector:
+        boolean:
     media_width:
       selector:
         number:
