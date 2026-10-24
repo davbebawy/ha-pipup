@@ -587,6 +587,111 @@ When you show indefinite (`duration: 0`) popups, make the automation `mode: queu
 `continue_on_error: true` on the pipup actions — with the default `mode: single` a dismiss that
 fires while a show is still running is silently dropped, leaving the popup on screen.
 
+### Doorbell: pause the TV and show the camera wall (app ≥ 0.29.0)
+
+Whoever is watching gets the picture of every outside camera at once, and the film waits. The wall
+closes by itself after two minutes (`duration`), so a restart or a missed second trigger cannot leave
+it on screen.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.doorbell_pressed
+    to: "on"
+    not_from: [unavailable, unknown]
+actions:
+  # pause, not play/pause: running this twice must not resume playback
+  - action: media_player.media_pause
+    continue_on_error: true
+    target:
+      entity_id: media_player.pipup_living_room
+  - action: pipup.show
+    continue_on_error: true
+    target:
+      entity_id: binary_sensor.pipup_living_room_popup
+    data:
+      popup_id: doorbell_wall
+      duration: 120
+      grid_fullscreen: true
+      grid:
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=doorbell
+          label: Front door
+          poster_url: http://frigate.local:5000/api/doorbell/latest.jpg
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=driveway
+          label: Driveway
+          poster_url: http://frigate.local:5000/api/driveway/latest.jpg
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=garden
+          label: Garden
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=side
+          label: Side path
+mode: single   # a second press within the same run adds nothing
+```
+
+The media key reaches the app that holds the media session; an app without one (some live-TV
+apps) keeps playing. Point the tiles at substreams on a small streaming stick.
+
+### Dashboard button: YouTube on the living-room TV at a fixed volume (app ≥ 0.29.0)
+
+A script, so a dashboard button (`tap_action: perform-action`) or a voice command can call it. Starting
+the app wakes a sleeping screen first.
+
+```yaml
+script:
+  living_room_youtube:
+    alias: YouTube on the living-room TV
+    mode: single
+    sequence:
+      - action: media_player.select_source
+        target:
+          entity_id: media_player.pipup_living_room
+        data:
+          source: YouTube          # the app's name as in the media player's source list
+      - action: media_player.volume_set
+        target:
+          entity_id: media_player.pipup_living_room
+        data:
+          volume_level: 0.3
+```
+
+For a specific video or playlist use `pipup.launch_app` with `uri:
+https://www.youtube.com/watch?v=…` instead of `select_source`. On a box whose volume belongs to the TV
+set (HDMI-CEC, `volume_fixed: true`) `volume_set` is not offered; use `volume_down`/`volume_up` there.
+
+### Bedtime: pause the kids' TV with a card (app ≥ 0.29.0)
+
+At 21:00 on school nights whatever plays on the kids' TV is paused, with a card that says why. It
+only acts when the TV is actually on, and uses the [info card blueprint](#info-card-on-the-tv-script)
+for the card.
+
+```yaml
+triggers:
+  - trigger: time
+    at: "21:00:00"
+conditions:
+  - condition: time
+    weekday: [sun, mon, tue, wed, thu]
+  - condition: state
+    entity_id: media_player.pipup_kids_room
+    state: "on"
+actions:
+  - action: media_player.media_pause
+    target:
+      entity_id: media_player.pipup_kids_room
+  - action: script.tv_info_card
+    data:
+      card_id: bedtime
+      title: Bedtime
+      message: Time to brush your teeth. Sleep well!
+      urgency: info
+      duration: 60
+mode: single
+```
+
+The media player only reports the screen, not whether something is playing, so `media_pause` on a
+TV that is just showing its home screen does nothing — which is fine here. If a time trigger can be
+missed (Home Assistant restarting at 21:00), add a `homeassistant: start` trigger with a time
+condition between 21:00 and 21:15.
+
 ## Device notes: TCL Google TV needs a keep-alive automation
 
 On TCL Google TV sets, PiPup does not stay up by itself. TCL runs a vendor guard
