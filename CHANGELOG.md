@@ -8,6 +8,9 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
 ## [Unreleased]
+### Docs
+- Three examples with the new TV control and camera wall: doorbell (pause + camera wall), a dashboard button
+  (app + volume) and bedtime (pause + info card).
 
 ## [v1.28.0] — 2026-10-23 (TV control, camera wall, blueprints)
 ### Added
