@@ -572,3 +572,48 @@ async def test_tv_in_use_not_reinstalled_next_night(hass: HomeAssistant, freezer
         assert adb.install.await_count == 1
     finally:
         await _teardown(hass, entry, patchers)
+
+
+async def test_running_set_released(hass: HomeAssistant, freezer) -> None:
+    """A finished app-route run and an unloaded entry leave no TV blocking the rest."""
+    tv = dict(SILENT_TV)
+    entry, patchers = await _setup(hass, tv, AUTO)
+    running = lambda: hass.data[DOMAIN].get("auto_update_running")  # noqa: E731
+    try:
+        _, entity = await _entity(hass)
+        await _at(freezer, 26, 3, 10)
+        await _tick(entity, _fake_adb())
+        assert running() == {entity.entity_id}
+        tv["version"] = "0.30.0"
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert not running()
+
+        # pending again, then the entry unloads mid-run
+        tv["version"] = "0.29.2"
+        await _at(freezer, 27, 3, 10)
+        await _tick(entity, _fake_adb())
+        assert running() == {entity.entity_id}
+    finally:
+        await _teardown(hass, entry, patchers)
+    assert not running()
+
+
+async def test_restart_with_fresh_requested_record_stays_pending(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Restarted 5 minutes after the request, not landed yet: still running."""
+    await _at(freezer, 26, 3, 15)
+    mock_restore_cache(hass, [_requested_record(26, 3, 10)])
+    entry, patchers = await _setup(hass, dict(SILENT_TV), AUTO)
+    try:
+        entity_id, entity = await _entity(hass)
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        attrs = hass.states.get(entity_id).attributes
+        assert attrs["in_progress"] is True
+        assert attrs["last_auto_update"]["result"] == "requested"
+        assert entity._auto_pending
+        assert hass.data[DOMAIN]["auto_update_running"] == {entity_id}
+    finally:
+        await _teardown(hass, entry, patchers)
