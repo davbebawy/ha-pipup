@@ -17,11 +17,11 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
   the connection on save and walks you through *Allow debugging from this computer?* on the TV.
 - **Install over ADB** on the update entity, without a remote press on Android < 12 (PiPup #76, #49):
   the same steps as `install.sh` in pure Python (`adb-shell`, the library core's Android TV integration
-  uses), so it works on Home Assistant OS. APK downloaded once for all TVs and checked against the
-  release's sha256; app-ops re-granted; never uninstalls. Attribute `install_method` on the update
+  uses), so it works on Home Assistant OS. APK checked against the release's sha256 and not kept
+  in memory afterwards; app-ops re-granted; never uninstalls. Attribute `install_method` on the update
   entity; `requires_remote` is false with ADB.
 ### Dependencies
-- `adb-shell[async]==0.4.4`, the version Home Assistant core pins for `androidtv`.
+- `adb-shell[async]>=0.4.4`: Home Assistant core already ships it for `androidtv`, so it follows core's version.
 
 ## [v1.28.1] — 2026-10-24 (full-screen popups)
 ### Added

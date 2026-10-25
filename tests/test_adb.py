@@ -222,6 +222,8 @@ async def test_install_button_uses_adb_below_android_12(hass: HomeAssistant) -> 
     tv = dict(STATE)
     entry, patchers = await _setup(hass, tv, AUTO)
     adb = _fake_adb()
+    # a cached APK from the download: gone after the install
+    hass.data.setdefault(DOMAIN, {})["apk_cache"] = {APK_URL: APK}
 
     async def installed(_apk):
         tv["version"] = "0.30.0"
@@ -245,6 +247,7 @@ async def test_install_button_uses_adb_below_android_12(hass: HomeAssistant) -> 
         state = hass.states.get(entity_id)
         assert state.attributes["installed_version"] == "0.30.0"
         assert state.attributes["in_progress"] is False
+        assert hass.data[DOMAIN]["apk_cache"] == {}
     finally:
         for p in patchers:
             p.stop()
@@ -438,7 +441,9 @@ async def test_cleanup_does_not_hide_the_real_error(hass: HomeAssistant) -> None
 
     async def shell(command, **_):
         seen.append(command)
-        if command.startswith(("pm install", "rm ")):
+        if command.startswith("pm install"):
+            return "Failure [INSTALL_FAILED_OLDER_SDK]"
+        if command.startswith("rm "):
             raise TcpTimeoutException("gone")
         return ""
 
@@ -446,7 +451,7 @@ async def test_cleanup_does_not_hide_the_real_error(hass: HomeAssistant) -> None
     adb = await _adb_session(hass, device)
     with pytest.raises(AdbError) as err:
         await adb.install(APK)
-    assert err.value.reason == "connection_lost"
+    assert err.value.reason == "install_failed"
     assert "rm -f /data/local/tmp/pipup.apk" in seen
     assert not any(c.startswith("appops") for c in seen)
 
@@ -511,12 +516,18 @@ async def test_own_key_private_and_created_once(hass: HomeAssistant, tmp_path) -
             await adb_mod.async_get_signer(hass, "androidtv")
     assert err.value.reason == "no_androidtv_key"
 
-    # a key without its .pub (found on a real host): a clear error, not a traceback
-    (tmp_path / ".storage" / "androidtv_adbkey").write_bytes(path.read_bytes())
-    with pytest.raises(AdbError) as err:
-        with patch.object(hass.config, "config_dir", str(tmp_path)):
-            await adb_mod.async_get_signer(hass, "androidtv")
-    assert err.value.reason == "key_unreadable"
+    # a key without its .pub (found on a real host), or PEM-wrapped garbage
+    # (pyasn1 error): a clear error, not a traceback
+    key = tmp_path / ".storage" / "androidtv_adbkey"
+    key.write_bytes(path.read_bytes())
+    for content in (None, b"-----BEGIN PRIVATE KEY-----\nQUJD\n-----END PRIVATE KEY-----\n"):
+        if content is not None:
+            key.write_bytes(content)
+            (tmp_path / ".storage" / "androidtv_adbkey.pub").write_text("x")
+        with pytest.raises(AdbError) as err:
+            with patch.object(hass.config, "config_dir", str(tmp_path)):
+                await adb_mod.async_get_signer(hass, "androidtv")
+        assert err.value.reason == "key_unreadable"
 
 
 async def test_release_unavailable_is_not_no_apk(hass: HomeAssistant) -> None:

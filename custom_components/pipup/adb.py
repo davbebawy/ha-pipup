@@ -173,8 +173,9 @@ async def async_get_signer(hass: HomeAssistant, which: str) -> PythonRSASigner:
     async with lock:
         try:
             return await hass.async_add_executor_job(_load_signer, path)
-        except (OSError, ValueError) as err:
-            # a missing .pub next to the key, a damaged or unreadable file
+        except Exception as err:  # noqa: BLE001 - only file parsing happens here
+            # a missing .pub next to the key, a damaged or unreadable file (rsa,
+            # pyasn1 and cryptography each raise their own parse errors)
             raise AdbError("key_unreadable", f"{path}: {err}") from err
 
 

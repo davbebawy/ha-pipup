@@ -803,7 +803,7 @@ computer?* and the options ask you to tick **Always allow** and press OK. A TV t
 Android TV integration needs nothing: pick that integration's key.
 
 After that, **Install** on the update entity installs over ADB: the latest release's APK is downloaded
-once (and checked against the release's sha256), pushed to the TV, installed with `pm install -r`, and
+(and checked against the release's sha256), pushed to the TV, installed with `pm install -r`, and
 the app-ops a reinstall resets are granted again (overlay, install, `android:auto_start` on TCL, the
 accessibility service if it was on). The app's service is started in the background; only if it does not
 come back (TCL's vendor guard) is the app opened briefly, and the TV goes back to sleep if it was

@@ -19,7 +19,7 @@
     "adb_shell"
   ],
   "requirements": [
-    "adb-shell[async]==0.4.4"
+    "adb-shell[async]>=0.4.4"
   ],
   "version": "1.29.0",
   "zeroconf": [
