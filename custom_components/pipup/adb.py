@@ -112,6 +112,9 @@ REASONS: dict[str, str] = {
     "download_failed": "downloading the APK failed",
     "checksum_mismatch": "the downloaded APK does not match the release's sha256",
     "app_not_back": "the app did not start again after the install",
+    "app_update_not_landed": "the app's own update did not land within 15 minutes",
+    "app_unreachable": "the app on the TV did not answer",
+    "unexpected": "an unexpected error",
     "tv_in_use": (
         "the app did not start again by itself and the TV is in use, so it was not "
         "opened; it starts the next time the TV is switched on"
@@ -127,6 +130,21 @@ class AdbError(Exception):
         super().__init__(f"{message}: {detail}" if detail else message)
         self.reason = reason
         self.detail = detail
+
+
+def requires_remote(data: dict[str, Any]) -> bool:
+    """Whether the app's own update needs a press on the remote on this TV.
+
+    `silent` is authoritative (app >= 0.12.1: false on Android < 12, where an
+    install cannot complete without a remote press); fall back to the OS version
+    for older apps that do not report it. Unknown = no.
+    """
+    silent = (data.get("update") or {}).get("silent")
+    if silent is not None:
+        return not silent
+    android = str((data.get("device") or {}).get("android") or "")
+    major = android.split(".")[0]
+    return major.isdigit() and int(major) < 12
 
 
 def effective_method(options: dict[str, Any], data: dict[str, Any]) -> str:

@@ -37,7 +37,7 @@ from homeassistant.helpers.selector import (
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util import slugify
 
-from .adb import AdbError, PiPupAdb, effective_method
+from .adb import AdbError, PiPupAdb, effective_method, requires_remote
 from .api import PiPupClient, PiPupError, PiPupUnsupportedError
 from .parent import PARENT_DOMAINS
 from .const import (
@@ -363,7 +363,7 @@ class PiPupOptionsFlow(OptionsFlow):
         return (
             bool(options.get(CONF_AUTO_UPDATE))
             and effective_method(options, data) == INSTALL_METHOD_APP
-            and (data.get("update") or {}).get("silent") is False
+            and requires_remote(data)
         )
 
     async def _test_adb(self, options: dict[str, Any], auth_timeout: float) -> str | None:

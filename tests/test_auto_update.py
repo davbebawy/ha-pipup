@@ -11,7 +11,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import mock_restore_cache
 
-from custom_components.pipup.adb import AdbError
+from custom_components.pipup.adb import REASONS, AdbError
 from custom_components.pipup.auto_update import parse_time, window_start
 from custom_components.pipup.const import DOMAIN
 
@@ -346,5 +346,229 @@ async def test_options_refuse_auto_update_needing_remote(hass: HomeAssistant) ->
         )
         assert result["errors"] == {"base": "auto_update_needs_adb"}
         assert "auto_update" not in entry.options
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+# --- review fixes (PR #51)
+
+
+async def _fail_three_nights(hass, freezer, entity, adb) -> None:
+    adb.install.side_effect = AdbError("install_failed", "Failure [X]")
+    for night in (26, 27, 28):
+        await _at(freezer, night, 3, 10)
+        await _tick(entity, adb)
+
+
+async def test_manual_install_clears_failures_and_repair(hass: HomeAssistant, freezer) -> None:
+    """Updated by hand after failed nights: the repair goes, the counter restarts."""
+    tv = dict(STATE)
+    entry, patchers = await _setup(hass, tv, AUTO)
+    adb = _fake_adb()
+    issue_id = f"auto_update_failed_{entry.entry_id}"
+    try:
+        entity_id, entity = await _entity(hass)
+        await _fail_three_nights(hass, freezer, entity, adb)
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+        tv["version"] = "0.30.0"  # Install pressed, or the app's own check
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+        assert hass.states.get(entity_id).attributes["auto_update_failures"] == 0
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_switching_off_clears_repair(hass: HomeAssistant, freezer) -> None:
+    """Automatic updates switched off: no repair about them stays behind."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    issue_id = f"auto_update_failed_{entry.entry_id}"
+    try:
+        _, entity = await _entity(hass)
+        await _fail_three_nights(hass, freezer, entity, adb)
+        hass.config_entries.async_update_entry(entry, options={"install_method": "auto"})
+        await hass.async_block_till_done()
+        await _tick(entity, adb)
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_unexpected_error_uses_the_night(hass: HomeAssistant, freezer) -> None:
+    """A surprise exception is recorded once, not retried every ten minutes."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    adb.install.side_effect = ValueError("broken JSON from a mirror")
+    try:
+        entity_id, entity = await _entity(hass)
+        await _at(freezer, 26, 3, 10)
+        await _tick(entity, adb)
+        await _at(freezer, 26, 3, 20)
+        await _tick(entity, adb)
+        assert adb.install.await_count == 1
+        attrs = hass.states.get(entity_id).attributes
+        assert attrs["last_auto_update"]["result"] == "unexpected"
+        assert attrs["auto_update_failures"] == 1
+        assert attrs["in_progress"] is False
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+def _requested_record(day: int, hour: int, minute: int) -> State:
+    return State(
+        "update.tv_pipup_app",
+        "on",
+        {
+            "last_auto_update": {
+                "time": _local(day, hour, minute).isoformat(),
+                "result": "requested",
+                "from": "0.29.2",
+                "to": None,
+                "method": "app",
+            },
+            "auto_update_failures": 0,
+        },
+    )
+
+
+SILENT_TV = {**STATE, "device": {"android": "14"}, "update": {"installing": False, "silent": True}}
+
+
+async def test_restart_during_app_run_still_logs_success(hass: HomeAssistant, freezer) -> None:
+    """HA restarted while the app updated itself: the run is picked up and closed."""
+    await _at(freezer, 26, 3, 15)
+    mock_restore_cache(hass, [_requested_record(26, 3, 10)])
+    tv = {**SILENT_TV, "version": "0.30.0"}  # landed during the restart
+    entry, patchers = await _setup(hass, tv, AUTO)
+    try:
+        entity_id, _ = await _entity(hass)
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        record = hass.states.get(entity_id).attributes["last_auto_update"]
+        assert record["result"] == "success"
+        assert record["to"] == "0.30.0"
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_restart_during_app_run_counts_failure(hass: HomeAssistant, freezer) -> None:
+    """Restarted, and the update never landed: a counted failure after the deadline."""
+    await _at(freezer, 26, 3, 40)  # requested 30 minutes ago
+    mock_restore_cache(hass, [_requested_record(26, 3, 10)])
+    entry, patchers = await _setup(hass, dict(SILENT_TV), AUTO)
+    try:
+        entity_id, _ = await _entity(hass)
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        attrs = hass.states.get(entity_id).attributes
+        assert attrs["last_auto_update"]["result"] == "app_update_not_landed"
+        assert attrs["auto_update_failures"] == 1
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_stuck_installing_flag_ends_the_run(hass: HomeAssistant, freezer) -> None:
+    """The app keeps saying `installing`: the run still ends after the deadline."""
+    tv = dict(SILENT_TV)
+    entry, patchers = await _setup(hass, tv, AUTO)
+    try:
+        entity_id, entity = await _entity(hass)
+        await _at(freezer, 26, 3, 10)
+        await _tick(entity, _fake_adb())
+        tv["update"] = {"installing": True, "silent": True}
+        await _at(freezer, 26, 3, 30)
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        record = hass.states.get(entity_id).attributes["last_auto_update"]
+        assert record["result"] == "app_update_not_landed"
+        # readable, not a raw key
+        assert "did not land within 15 minutes" in REASONS["app_update_not_landed"]
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_dst_repeated_hour_is_one_night(hass: HomeAssistant, freezer) -> None:
+    """Clocks go back (25-10-2026, 03:00 → 02:00): 02:30-03:30 is still one night."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    try:
+        _, entity = await _entity(hass)
+        tz = dt_util.get_default_time_zone()
+        first = datetime(2026, 10, 25, 2, 40, tzinfo=tz)  # summer time, +02:00
+        entity._last_auto = {"time": first.isoformat(), "result": "install_failed"}
+        second = datetime(2026, 10, 25, 2, 35, fold=1, tzinfo=tz)  # winter time, +01:00
+        night = window_start(second, time(2, 30), time(3, 30))
+        assert night is not None and night.utcoffset().total_seconds() == 3600
+        assert entity._attempted_since(night)
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_old_app_without_silent_flag(hass: HomeAssistant, freezer) -> None:
+    """An app that does not report `silent`: the Android version decides, in the
+    options and in the tick alike."""
+    from custom_components.pipup.api import PiPupClient
+
+    old = {**STATE, "device": {"android": "14"}, "update": {"installing": False}}
+    entry, patchers = await _setup(hass, old, {"install_method": "app", "auto_update": True})
+    try:
+        _, entity = await _entity(hass)
+        await _at(freezer, 26, 3, 10)
+        await _tick(entity, _fake_adb())
+        PiPupClient.update_app.assert_awaited_once()
+    finally:
+        await _teardown(hass, entry, patchers)
+
+    old11 = {**STATE, "device": {"android": "11"}, "update": {"installing": False}}
+    entry, patchers = await _setup(hass, old11)
+    try:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"advanced_install": {"install_method": "app", "adb_port": 5555,
+                                  "adb_key": "own", "auto_update": True,
+                                  "quiet_start": "03:00:00", "quiet_end": "05:00:00"}},
+        )
+        assert result["errors"] == {"base": "auto_update_needs_adb"}
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_app_route_run_blocks_other_tvs(hass: HomeAssistant, freezer) -> None:
+    """While one TV's app updates itself, another TV waits for a later tick."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    try:
+        _, entity = await _entity(hass)
+        running = hass.data.setdefault(DOMAIN, {}).setdefault("auto_update_running", set())
+        running.add("update.other_tv_app")
+        await _at(freezer, 26, 3, 10)
+        await _tick(entity, adb)
+        adb.connect.assert_not_awaited()
+        running.clear()
+        await _tick(entity, adb)
+        adb.connect.assert_awaited_once()
+    finally:
+        await _teardown(hass, entry, patchers)
+
+
+async def test_tv_in_use_not_reinstalled_next_night(hass: HomeAssistant, freezer) -> None:
+    """Installed while the TV was on: the next nights wait for the app, no reinstall."""
+    from custom_components.pipup.api import PiPupError, PiPupClient
+
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    adb.asleep = AsyncMock(return_value=False)
+    try:
+        _, entity = await _entity(hass)
+        PiPupClient.state.side_effect = PiPupError("down")
+        with patch("custom_components.pipup.update.ADB_APP_BACK_TIMEOUT", 0):
+            await _at(freezer, 26, 3, 10)
+            await _tick(entity, adb)
+            await _at(freezer, 27, 3, 10)
+            await _tick(entity, adb)
+        assert adb.install.await_count == 1
     finally:
         await _teardown(hass, entry, patchers)

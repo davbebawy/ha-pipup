@@ -31,6 +31,7 @@ from .adb import (
     async_download_apk,
     effective_method,
     forget_apk,
+    requires_remote,
     release_apk,
 )
 from .api import PiPupError
@@ -96,8 +97,10 @@ ADB_APP_BACK_POLL = 2.0
 # Automatic updates: how often each TV checks whether it is its turn. Short enough
 # that a TV which comes online inside the window is still reached that night.
 AUTO_TICK = timedelta(minutes=10)
-# one TV at a time, across all entries
+# one TV at a time, across all entries: the lock covers an ADB install, the set the
+# app's own updates that run on after the request (entity ids)
 _AUTO_LOCK_KEY = "auto_update_lock"
+_AUTO_RUNNING_KEY = "auto_update_running"
 # failures the user has to fix on the TV (or in the options): a repair right away
 _USER_FIXABLE = {
     "not_authorized",
@@ -213,6 +216,9 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         self._last_auto: dict | None = None
         self._auto_failures = 0
         self._auto_pending = False
+        # when the pending app-route run was requested (closes it even if the app
+        # keeps reporting `installing`)
+        self._auto_requested_at = None
 
     async def async_added_to_hass(self) -> None:
         """Restore the automatic-update record and start the nightly check."""
@@ -224,9 +230,28 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             failures = last.attributes.get("auto_update_failures")
             if isinstance(failures, int):
                 self._auto_failures = failures
+            # restarted while the app's own update ran: pick that run up again, so
+            # it still ends in a logbook entry (or a counted failure)
+            if self._last_auto and self._last_auto.get("result") == "requested":
+                requested = dt_util.parse_datetime(str(self._last_auto.get("time") or ""))
+                if requested is not None:
+                    self._auto_requested_at = dt_util.as_utc(requested)
+                    self._install_requested_at = self._auto_requested_at
+                    self._version_at_install = self._last_auto.get("from")
+                    self._set_auto_pending(True)
         self.async_on_remove(
             async_track_time_interval(self.hass, self._async_auto_tick, AUTO_TICK)
         )
+        self.async_on_remove(lambda: self._set_auto_pending(False))
+
+    def _set_auto_pending(self, pending: bool) -> None:
+        """Mark this TV's app-route run as running, for the one-TV-at-a-time rule."""
+        self._auto_pending = pending
+        running = self.hass.data.setdefault(DOMAIN, {}).setdefault(_AUTO_RUNNING_KEY, set())
+        if pending:
+            running.add(self.entity_id)
+        else:
+            running.discard(self.entity_id)
     @property
     def should_poll(self) -> bool:
         """Poll, unlike the other entities on this coordinator.
@@ -321,14 +346,24 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         the version changed, a failure when the progress window ran out without.
         """
         in_progress = self.in_progress
-        if self._auto_pending and not in_progress:
-            self._auto_pending = False
+        overdue = (
+            self._auto_requested_at is not None
+            and dt_util.utcnow() - self._auto_requested_at > INSTALL_PROGRESS_DEADLINE
+        )
+        if self._auto_pending and (not in_progress or overdue):
+            # overdue: the app may keep reporting `installing`; the run ends anyway
+            self._set_auto_pending(False)
+            self._auto_requested_at = None
             before = self._version_at_install
             if self.installed_version != before:
                 self._auto_result("success", before, "app")
             else:
                 error = (self.coordinator.data.get("update") or {}).get("error")
                 self._auto_result("app_update_not_landed", before, "app", error or "")
+        elif self._auto_failures and self._up_to_date():
+            # updated another way (Install pressed, the app's own check): the
+            # failed nights no longer matter
+            self._clear_auto_failures()
         self.coordinator.set_update_polling(in_progress)
         super()._handle_coordinator_update()
 
@@ -345,18 +380,8 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         the app wakes the TV and shows a popup with an Install button (app >= 0.12.1).
         """
         update = self.coordinator.data.get("update") or {}
-        device = self.coordinator.data.get("device") or {}
         permissions = self.coordinator.data.get("permissions") or {}
-        # `silent` is authoritative (app >= 0.12.1: false on Android < 12, where an
-        # install cannot complete without a remote press); fall back to the OS version
-        # for older apps that do not report it.
-        silent = update.get("silent")
-        if silent is not None:
-            requires_remote = not silent
-        else:
-            android = str(device.get("android") or "")
-            major = int(android.split(".")[0]) if android.split(".")[0].isdigit() else None
-            requires_remote = major is not None and major < 12
+        requires_remote = self._requires_remote()
         method = effective_method(
             self.coordinator.config_entry.options, self.coordinator.data
         )
@@ -372,6 +397,23 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             "requires_remote": requires_remote,
             "pending_confirmation": bool(update.get("pendingUserAction")),
         }
+
+    def _requires_remote(self) -> bool:
+        return requires_remote(self.coordinator.data)
+
+    def _up_to_date(self) -> bool:
+        installed = self.installed_version
+        return bool(installed) and installed == self.latest_version
+
+    @callback
+    def _clear_auto_failures(self) -> None:
+        self._auto_failures = 0
+        ir.async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"{ISSUE_AUTO_UPDATE_FAILED}_{self.coordinator.config_entry.entry_id}",
+        )
+        self.async_write_ha_state()
 
     async def async_install(self, version: str | None, backup: bool, **kwargs) -> None:
         """Trigger the app's self-update on the TV.
@@ -486,6 +528,8 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         """
         enabled, start, end = self._auto_options()
         if not enabled:
+            if self._auto_failures:
+                self._clear_auto_failures()  # switched off: no repair about it
             return
         night = window_start(dt_util.now(), start, end)
         if night is None:
@@ -496,18 +540,21 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             return  # this night's attempt was made (success or not)
         if self.state != STATE_ON or self.in_progress or self._auto_pending:
             return  # nothing to install (also: a skipped version), or already busy
+        record = self._last_auto or {}
+        if record.get("result") == "success" and record.get("to") == self.latest_version:
+            return  # installed, the app waits for the TV to be switched on (tv_in_use)
         data = self.coordinator.data
         if not self.coordinator.online or data.get("visible"):
             return  # unreachable, or a popup on screen: try again at the next tick
         method = effective_method(self.coordinator.config_entry.options, data)
-        if method != INSTALL_METHOD_ADB and not (data.get("update") or {}).get("silent"):
+        if method != INSTALL_METHOD_ADB and self._requires_remote():
             # the app's own update would wait for a press on the remote at night
             _LOGGER.debug("PiPup on %s: automatic update needs ADB here", self.entity_id)
             return
         lock = self.hass.data.setdefault(DOMAIN, {}).setdefault(
             _AUTO_LOCK_KEY, asyncio.Lock()
         )
-        if lock.locked():
+        if lock.locked() or self.hass.data[DOMAIN].get(_AUTO_RUNNING_KEY):
             return  # another TV installs right now
         async with lock:
             before = self.installed_version
@@ -516,7 +563,9 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
                     await self._async_install_adb(auto=True)
                 else:
                     await self._async_install_app()
-                    self._auto_pending = True  # closed in _handle_coordinator_update
+                    # closed in _handle_coordinator_update
+                    self._auto_requested_at = dt_util.utcnow()
+                    self._set_auto_pending(True)
                     self._last_auto = {"time": dt_util.now().isoformat(), "result": "requested",
                                        "from": before, "to": None, "method": "app"}
                     self.async_write_ha_state()
@@ -533,12 +582,21 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             except PiPupError as err:
                 self._auto_result("app_unreachable", before, "app", str(err))
                 return
+            except Exception as err:  # noqa: BLE001 - a timer job: record, never retry every tick
+                _LOGGER.exception("Automatic PiPup update on %s failed", self.entity_id)
+                self._auto_result("unexpected", before, method, repr(err))
+                return
         self._auto_result("success", before, "adb")
 
     def _attempted_since(self, night) -> bool:
         """Whether the last automatic attempt falls in the window that started at `night`."""
         when = dt_util.parse_datetime(str((self._last_auto or {}).get("time") or ""))
-        return when is not None and when >= night
+        if when is None:
+            return False
+        # On the wall clock: in the hour that repeats when the clocks go back, two
+        # instants share one local time, and a UTC comparison would see a new night.
+        local = when.astimezone(night.tzinfo).replace(tzinfo=None)
+        return local >= night.replace(tzinfo=None)
 
     @callback
     def _auto_result(
