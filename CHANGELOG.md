@@ -9,6 +9,15 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 
 ## [Unreleased]
 
+## [v1.30.0] — 2026-10-25 (automatic updates)
+### Added
+- **Automatic updates** in *Advanced install* (#49): a new app release is installed by itself inside a
+  quiet window (default 03:00–05:00), one TV at a time, once a night, never while a popup is on screen,
+  and on a TV that is on the app is never opened. App self-update where it is silent (Android 12+),
+  ADB below; a skipped version is left alone. Success = a logbook entry; a failure retries the next
+  night, with a repair after three failed nights or at once for something to fix on the TV. Attributes
+  `auto_update`, `last_auto_update`, `auto_update_failures` on the update entity, restored after a restart.
+
 ## [v1.29.0] — 2026-10-25 (Advanced install: built-in ADB install)
 ### Added
 - **Advanced install** in the options (gear icon), a collapsed section per TV: install method (*App

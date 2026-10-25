@@ -42,6 +42,17 @@ CONF_ADB_KEY: Final = "adb_key"
 ADB_KEY_OWN: Final = "own"
 ADB_KEY_ANDROIDTV: Final = "androidtv"
 ADB_KEYS: Final = [ADB_KEY_OWN, ADB_KEY_ANDROIDTV]
+# Automatic updates (1.30.0): a new release is installed by itself inside a quiet
+# window, one TV at a time; a failure retries the next night.
+CONF_AUTO_UPDATE: Final = "auto_update"
+CONF_QUIET_START: Final = "quiet_start"
+CONF_QUIET_END: Final = "quiet_end"
+DEFAULT_QUIET_START: Final = "03:00:00"
+DEFAULT_QUIET_END: Final = "05:00:00"
+# a repair only after this many failed nights in a row (or at once when the user
+# has to fix something on the TV)
+AUTO_UPDATE_MAX_FAILURES: Final = 3
+ISSUE_AUTO_UPDATE_FAILED: Final = "auto_update_failed"
 CONF_DEFAULT_POSITION: Final = "default_position"
 DEFAULT_POSITION: Final = "top_right"
 CONF_DEFAULT_DURATION: Final = "default_duration"

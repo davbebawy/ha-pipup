@@ -809,8 +809,27 @@ accessibility service if it was on). The app's service is started in the backgro
 come back (TCL's vendor guard) is the app opened briefly, and the TV goes back to sleep if it was
 asleep. It never uninstalls the app (that would lose its device id): a build with another signature is
 reported instead. The update entity's `install_method` attribute shows `app` or `adb`, and
-`requires_remote` is `false` with ADB. Automatic nightly updates follow in a later version
-([#49](https://github.com/mhoogenbosch/ha-pipup/issues/49)).
+`requires_remote` is `false` with ADB.
+
+#### Automatic updates (1.30.0)
+
+In the same section, **Automatic updates** installs each new release by itself inside a **quiet window**
+(default 03:00–05:00 local time; a window may cross midnight):
+
+- one TV at a time, and only when the TV is reachable and no popup is on screen;
+- one attempt per night: a failure is retried the next night, not every few minutes;
+- on a TV that is on, the app is never opened. The install itself never interrupts what is playing
+  (only PiPup restarts); if the app does not come back by itself, it starts the next time the TV is
+  switched on;
+- the app's own update is used only where it is silent (Android 12+); a TV on Android < 12 needs the
+  install method Auto or ADB, and the options say so;
+- a skipped version (**Skip** on the update entity) is not installed.
+
+A success only writes a logbook entry such as *PiPup app updated 0.29.2 → 0.30.0 (ADB)*. A failure
+is logged and counted; a repair appears after three failed nights, or at once when something on the TV
+needs fixing (debugging not allowed, a build with another signature, a key that cannot be read). It
+disappears after the next successful update. The update entity shows `auto_update`,
+`last_auto_update` (time, result, versions, method) and `auto_update_failures`.
 
 Network debugging gives shell access to anyone on the LAN who is allowed by the TV, so it is opt-in and
 off by default; the integration does nothing beyond what `install.sh` does.

@@ -78,11 +78,16 @@
             "data": {
               "install_method": "Installatiemethode",
               "adb_port": "ADB-poort",
-              "adb_key": "ADB-sleutel"
+              "adb_key": "ADB-sleutel",
+              "auto_update": "Automatische updates",
+              "quiet_start": "Rustig venster vanaf",
+              "quiet_end": "Rustig venster tot"
             },
             "data_description": {
               "install_method": "Self-update van de app: zoals voorheen; op Android < 12 vraagt de tv om een druk op OK. Automatisch: de eigen update van de app op Android 12+ (stil), een ADB-install op oudere versies. ADB: altijd ADB. Bij kiezen van Automatisch of ADB wordt de verbinding getest zodra je opslaat.",
-              "adb_key": "De eigen sleutel van PiPup (.storage/pipup_adbkey), of die van de Android TV-integratie, zodat een tv die die al vertrouwt geen nieuwe melding toont."
+              "adb_key": "De eigen sleutel van PiPup (.storage/pipup_adbkey), of die van de Android TV-integratie, zodat een tv die die al vertrouwt geen nieuwe melding toont.",
+              "auto_update": "Installeer een nieuwe PiPup-release vanzelf binnen het rustige venster: één tv tegelijk, nooit terwijl er een popup in beeld is, en op een tv die aan staat wordt de app nooit geopend. Een geslaagde update komt alleen in het logboek; een mislukte wordt de volgende nacht opnieuw geprobeerd, met een repair na 3 mislukte nachten (of meteen als er op de tv iets opgelost moet worden). Vereist ADB op Android < 12.",
+              "quiet_start": "Lokale tijd. Een venster mag over middernacht lopen; dezelfde begin- en eindtijd = de hele dag."
             }
           }
         }
@@ -97,7 +102,8 @@
       "adb_cannot_connect": "ADB op de tv is niet bereikbaar. Zet netwerkfoutopsporing (ADB) aan in de ontwikkelaarsopties en controleer de poort.",
       "adb_not_authorized": "De tv heeft foutopsporing vanaf Home Assistant niet toegestaan.",
       "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel.",
-      "adb_key_unreadable": "Het ADB-sleutelbestand (of de .pub ervan) is niet leesbaar. Kies de andere sleutel, of verwijder het beschadigde bestand uit .storage."
+      "adb_key_unreadable": "Het ADB-sleutelbestand (of de .pub ervan) is niet leesbaar. Kies de andere sleutel, of verwijder het beschadigde bestand uit .storage.",
+      "auto_update_needs_adb": "Op deze tv vraagt de eigen update van de app om een druk op de afstandsbediening, dus automatische updates vereisen installatiemethode Automatisch of ADB."
     }
   },
   "entity": {
@@ -662,6 +668,10 @@
           "not_loaded": "Dit PiPup-apparaat is nu niet geladen."
         }
       }
+    },
+    "auto_update_failed": {
+      "title": "Automatische PiPup-update op {name} mislukt",
+      "description": "De automatische update van de PiPup-app op {name} is mislukt ({failures}× achter elkaar): {reason}.\n\nHij wordt elke nacht opnieuw geprobeerd. Los de oorzaak op (zie de opties van de integratie, Geavanceerd installeren), of druk op Installeren bij de update-entiteit om het nu te proberen. Deze melding verdwijnt na de volgende geslaagde update."
     }
   },
   "config_subentries": {
