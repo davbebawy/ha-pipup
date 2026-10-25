@@ -83,7 +83,7 @@ async def test_download_verified_and_shared(hass: HomeAssistant, aioclient_mock)
 
 
 def _fake_device(outputs: dict[str, str]) -> MagicMock:
-    """An AdbDeviceTcpAsync whose shell answers by command prefix."""
+    """An AdbDeviceAsync whose shell answers by command prefix."""
     device = MagicMock()
     device.connect = AsyncMock()
     device.close = AsyncMock()
@@ -397,6 +397,7 @@ async def test_shell_waits_for_silent_command(hass: HomeAssistant) -> None:
     transport timeout at the read timeout. 1.30.0 passed only a long transport
     timeout, every wait became 10 s, and a TCL's install broke off half-way.
     """
+    from adb_shell import constants
     from adb_shell.hidden_helpers import _AdbTransactionInfo
 
     device = _fake_device({"pm install": "Success"})
@@ -409,7 +410,7 @@ async def test_shell_waits_for_silent_command(hass: HomeAssistant) -> None:
             None,
             None,
             kwargs.get("transport_timeout_s"),
-            kwargs.get("read_timeout_s", 10.0),
+            kwargs.get("read_timeout_s", constants.DEFAULT_READ_TIMEOUT_S),
             kwargs.get("timeout_s"),
         )
         assert info.transport_timeout_s >= 60, kwargs
