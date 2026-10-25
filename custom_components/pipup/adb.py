@@ -20,7 +20,7 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
-from adb_shell.adb_device_async import AdbDeviceTcpAsync
+from adb_shell.adb_device_async import AdbDeviceAsync
 from adb_shell.auth.keygen import keygen
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 from adb_shell.exceptions import (
@@ -34,6 +34,7 @@ from adb_shell.exceptions import (
     PushFailedError,
     TcpTimeoutException,
 )
+from adb_shell.transport.tcp_transport_async import TcpTransportAsync
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -66,12 +67,12 @@ ANDROIDTV_KEY = "androidtv_adbkey"
 # connect: the TCP part; an unknown key additionally waits AUTH_TIMEOUT for the
 # "Allow debugging?" answer on the TV
 CONNECT_TIMEOUT = 10.0
-# How long one command may stay silent. Passed as adb-shell's *transport* timeout:
-# that is the wait for the next bytes, and `pm install` prints nothing until it is
-# done (~5-20 s for an 8 MB APK on a TV). The read timeout stays at the library
-# default on purpose: it is only checked after a packet arrived, and when a TV
-# closes the socket adb-shell spins on the empty read until it expires - 10 s of
-# a blocked event loop rather than two minutes.
+# How long one command may stay silent: `pm install` prints nothing until it is
+# done (~5 s on a Fire TV, over 10 s on a TCL). adb-shell caps the transport
+# timeout (the wait for the next bytes) at the read timeout - `min(transport,
+# read)` in _AdbTransactionInfo - so both have to be raised; with the library's
+# default read timeout every wait was cut to 10 s (1.30.0, found on a TCL).
+# The long read timeout is safe because of _EofSafeTransport below.
 SHELL_TIMEOUT = 120.0
 # everything adb-shell raises while talking to a device, plus socket errors
 _ADB_ERRORS = (
@@ -201,6 +202,21 @@ async def async_get_signer(hass: HomeAssistant, which: str) -> PythonRSASigner:
             raise AdbError("key_unreadable", f"{path}: {err}") from err
 
 
+class _EofSafeTransport(TcpTransportAsync):
+    """TCP transport that reports a socket the TV closed, instead of spinning on it.
+
+    At EOF `StreamReader.read` returns b"" at once without yielding, and adb-shell
+    keeps calling it until its read timeout expires - with a two-minute timeout
+    that would block Home Assistant's event loop for two minutes.
+    """
+
+    async def bulk_read(self, numbytes, transport_timeout_s):
+        data = await super().bulk_read(numbytes, transport_timeout_s)
+        if not data and numbytes:
+            raise AdbConnectionError("the TV closed the ADB connection")
+        return data
+
+
 class PiPupAdb:
     """One ADB session to a TV; use as `async with`."""
 
@@ -211,7 +227,7 @@ class PiPupAdb:
         self._host = host
         self._port = int(options.get(CONF_ADB_PORT) or DEFAULT_ADB_PORT)
         self._key = options.get(CONF_ADB_KEY)
-        self._device: AdbDeviceTcpAsync | None = None
+        self._device: AdbDeviceAsync | None = None
 
     async def connect(self, auth_timeout: float) -> None:
         """Connect, mapping the failures to what the user has to fix.
@@ -221,8 +237,9 @@ class PiPupAdb:
         the TV rejected our signature and is showing "Allow debugging?".
         """
         signer = await async_get_signer(self._hass, self._key)
-        device = AdbDeviceTcpAsync(
-            self._host, self._port, default_transport_timeout_s=CONNECT_TIMEOUT
+        device = AdbDeviceAsync(
+            _EofSafeTransport(self._host, self._port),
+            default_transport_timeout_s=CONNECT_TIMEOUT,
         )
         prompted = False
 
@@ -266,7 +283,10 @@ class PiPupAdb:
         assert self._device is not None
         try:
             out = await self._device.shell(
-                command, transport_timeout_s=SHELL_TIMEOUT, timeout_s=SHELL_TIMEOUT
+                command,
+                transport_timeout_s=SHELL_TIMEOUT,
+                read_timeout_s=SHELL_TIMEOUT,
+                timeout_s=SHELL_TIMEOUT,
             )
         except _ADB_ERRORS as err:
             raise AdbError("connection_lost", str(err)) from err
@@ -289,7 +309,10 @@ class PiPupAdb:
         try:
             try:
                 await self._device.push(
-                    BytesIO(apk), DEVICE_APK, transport_timeout_s=SHELL_TIMEOUT
+                    BytesIO(apk),
+                    DEVICE_APK,
+                    transport_timeout_s=SHELL_TIMEOUT,
+                    read_timeout_s=SHELL_TIMEOUT,
                 )
             except _ADB_ERRORS as err:
                 # also a full /data/local/tmp (FAIL from the sync service)

@@ -83,7 +83,7 @@ async def test_download_verified_and_shared(hass: HomeAssistant, aioclient_mock)
 
 
 def _fake_device(outputs: dict[str, str]) -> MagicMock:
-    """An AdbDeviceTcpAsync whose shell answers by command prefix."""
+    """An AdbDeviceAsync whose shell answers by command prefix."""
     device = MagicMock()
     device.connect = AsyncMock()
     device.close = AsyncMock()
@@ -104,7 +104,7 @@ def _fake_device(outputs: dict[str, str]) -> MagicMock:
 
 async def _adb_session(hass: HomeAssistant, device: MagicMock) -> PiPupAdb:
     with (
-        patch("custom_components.pipup.adb.AdbDeviceTcpAsync", return_value=device),
+        patch("custom_components.pipup.adb.AdbDeviceAsync", return_value=device),
         patch(
             "custom_components.pipup.adb.async_get_signer",
             AsyncMock(return_value=object()),
@@ -391,19 +391,48 @@ async def test_default_keeps_app_self_update(hass: HomeAssistant) -> None:
 
 
 async def test_shell_waits_for_silent_command(hass: HomeAssistant) -> None:
-    """`pm install` prints nothing for a while: the transport timeout covers that.
+    """`pm install` prints nothing for a while: the *effective* wait covers that.
 
-    The read timeout is left at adb-shell's default: a closed socket makes the
-    library spin until it expires, so a long one would block the event loop.
+    Checked through adb-shell's own transaction info, because the library caps the
+    transport timeout at the read timeout. 1.30.0 passed only a long transport
+    timeout, every wait became 10 s, and a TCL's install broke off half-way.
     """
+    from adb_shell import constants
+    from adb_shell.hidden_helpers import _AdbTransactionInfo
+
     device = _fake_device({"pm install": "Success"})
     adb = await _adb_session(hass, device)
     await adb.install(APK)
-    for call in device.shell.await_args_list:
-        assert call.kwargs["transport_timeout_s"] >= 60
-        assert "read_timeout_s" not in call.kwargs
-    assert device.push.await_args.kwargs["transport_timeout_s"] >= 60
-    assert "read_timeout_s" not in device.push.await_args.kwargs
+    calls = [c.kwargs for c in device.shell.await_args_list]
+    calls.append(device.push.await_args.kwargs)
+    for kwargs in calls:
+        info = _AdbTransactionInfo(
+            None,
+            None,
+            kwargs.get("transport_timeout_s"),
+            kwargs.get("read_timeout_s", constants.DEFAULT_READ_TIMEOUT_S),
+            kwargs.get("timeout_s"),
+        )
+        assert info.transport_timeout_s >= 60, kwargs
+
+
+async def test_closed_socket_fails_fast() -> None:
+    """A TV that closes the socket: an error at once, not a spin until the timeout."""
+    import asyncio
+
+    from adb_shell.exceptions import AdbConnectionError
+
+    from custom_components.pipup.adb import _EofSafeTransport
+
+    transport = _EofSafeTransport("192.0.2.1", 5555)
+    reader = asyncio.StreamReader()
+    reader.feed_eof()
+    transport._reader = reader
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(AdbConnectionError):
+        await transport.bulk_read(24, 120)
+    assert loop.time() - start < 1
 
 
 async def test_install_order(hass: HomeAssistant) -> None:

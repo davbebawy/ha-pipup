@@ -9,6 +9,14 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 
 ## [Unreleased]
 
+## [v1.30.1] — 2026-10-25 (ADB install on slow TVs)
+### Fixed
+- **ADB install broke off after 10 s** on TVs where `pm install` takes longer (a TCL: 12.7 s). adb-shell
+  caps its wait for the next bytes at the read timeout, so the 2-minute wait passed in 1.29/1.30 was cut
+  to 10 s. HA then reported "the ADB connection dropped" while the TV finished the install on its own;
+  the permissions were not re-granted. Both timeouts are now 2 minutes, and a TV that closes the
+  connection is reported at once instead of keeping Home Assistant busy until the timeout.
+
 ## [v1.30.0] — 2026-10-25 (automatic updates)
 ### Added
 - **Automatic updates** in *Advanced install* (#49): a new app release is installed by itself inside a
