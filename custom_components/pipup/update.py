@@ -21,11 +21,20 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.helpers import entity_registry as er
 
+from .adb import (
+    AdbError,
+    PiPupAdb,
+    async_download_apk,
+    effective_method,
+    forget_apk,
+    release_apk,
+)
 from .api import PiPupError
 from .const import (
     CONF_UPDATE_SOURCE,
     DEFAULT_UPDATE_SOURCE,
     DOMAIN,
+    INSTALL_METHOD_ADB,
     UPDATE_SOURCE_OFF,
 )
 from .coordinator import PiPupCoordinator
@@ -66,6 +75,12 @@ _LOCK_KEY = "latest_release_locks"
 # device has not confirmed the new version yet. Matches the app's abandoned-install
 # deadline; on Android < 12 this window is where someone confirms on the TV.
 INSTALL_PROGRESS_DEADLINE = timedelta(minutes=15)
+# ADB install: the key is expected to be authorised already (the options flow did
+# that), so no long wait for a prompt nobody is looking at
+ADB_AUTH_TIMEOUT = 5.0
+# after `pm install` the old process is gone; any answer on /state is the new app
+ADB_APP_BACK_TIMEOUT = 30.0
+ADB_APP_BACK_POLL = 2.0
 
 
 async def _latest_release_tag(
@@ -119,8 +134,19 @@ async def _fetch_release_tag(
             (r for r in data if not r.get("draft") and not r.get("prerelease")), {}
         )
     tag = (data.get("tag_name") or "").lstrip("v") or None
-    caches[source] = {"tag": tag, "expires": now + _CACHE_TTL}
+    # the whole release too: the ADB install needs its APK asset and digest
+    caches[source] = {"tag": tag, "release": data, "expires": now + _CACHE_TTL}
     return tag
+
+
+async def _latest_release(hass: HomeAssistant, source: str) -> dict | None:
+    """The cached release behind the latest tag, fetched when not cached."""
+    await _latest_release_tag(hass, source)
+    cache = hass.data[DOMAIN][_CACHE_KEY].get(source) or {}
+    if not cache.get("release"):
+        await _latest_release_tag(hass, source, force=True)
+        cache = hass.data[DOMAIN][_CACHE_KEY].get(source) or {}
+    return cache.get("release")
 
 
 async def async_setup_entry(
@@ -275,7 +301,13 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             android = str(device.get("android") or "")
             major = int(android.split(".")[0]) if android.split(".")[0].isdigit() else None
             requires_remote = major is not None and major < 12
+        method = effective_method(
+            self.coordinator.config_entry.options, self.coordinator.data
+        )
+        if method == INSTALL_METHOD_ADB:
+            requires_remote = False  # a shell install never asks
         return {
+            "install_method": method,
             "install_error": update.get("error"),
             "install_permission": permissions.get("installPackages"),
             "requires_remote": requires_remote,
@@ -294,6 +326,12 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             raise HomeAssistantError(
                 "An update of the PiPup app is already running on this TV"
             )
+        if (
+            effective_method(self.coordinator.config_entry.options, self.coordinator.data)
+            == INSTALL_METHOD_ADB
+        ):
+            await self._async_install_adb()
+            return
         version_at_install = self.installed_version
         try:
             await self.coordinator.client.update_app()
@@ -304,6 +342,73 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         self.coordinator.set_update_polling(True)
         self.async_write_ha_state()
         await self.coordinator.async_refresh_soon()
+
+    async def _async_install_adb(self) -> None:
+        """Install the latest APK over ADB, like install.sh: no press on the TV.
+
+        Runs inside async_install, so Home Assistant shows progress for its whole
+        duration; in_progress stays true afterwards until the coordinator sees the
+        new version, the same as for the app's own update.
+        """
+        host = self.coordinator.client.host
+        before = self.installed_version
+        self._version_at_install = before
+        self._install_requested_at = dt_util.utcnow()
+        self.coordinator.set_update_polling(True)
+        self.async_write_ha_state()
+        try:
+            release = await _latest_release(self.hass, self._source)
+            if not release:
+                raise AdbError("release_unavailable")
+            apk = release_apk(release)
+            if apk is None:
+                raise AdbError("no_apk")
+            data = await async_download_apk(self.hass, apk)
+            async with PiPupAdb(
+                self.hass, host, self.coordinator.config_entry.options
+            ) as adb:
+                await adb.connect(ADB_AUTH_TIMEOUT)
+                await adb.install(data)
+                await adb.start_service()
+                if not await self._app_back():
+                    # TCL's vendor guard freezes a background-started service
+                    _LOGGER.debug("PiPup on %s silent after install; opening it", host)
+                    await adb.start_activity()
+                    if not await self._app_back():
+                        raise AdbError("app_not_back")
+        except AdbError as err:
+            self._install_requested_at = None
+            self.async_write_ha_state()
+            _LOGGER.warning("ADB install of PiPup on %s failed: %s", host, err)
+            raise HomeAssistantError(f"ADB install failed: {err}") from err
+        except BaseException:
+            # anything unforeseen: no Install button stuck "in progress" for 15 min
+            self._install_requested_at = None
+            self.async_write_ha_state()
+            raise
+        # one TV per press for now: nothing else needs the ~8 MB any more
+        forget_apk(self.hass)
+        await self.coordinator.async_refresh()
+        _LOGGER.info(
+            "PiPup app on %s updated %s → %s (ADB)",
+            self.coordinator.config_entry.title,
+            before,
+            self.installed_version,
+        )
+
+    async def _app_back(self) -> bool:
+        """Wait for /state to answer again after the install."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ADB_APP_BACK_TIMEOUT
+        while True:
+            try:
+                await self.coordinator.client.state()
+            except PiPupError:
+                if loop.time() >= deadline:
+                    return False
+                await asyncio.sleep(ADB_APP_BACK_POLL)
+            else:
+                return True
 
     async def async_update(self) -> None:
         """Refresh the latest release tag from the shared cache.

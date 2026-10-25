@@ -784,6 +784,39 @@ attribute is `true` for exactly these devices.
 
 **Fully hands-off updates on Android < 12** are possible over ADB, because a **shell-initiated**
 `adb install -r` has no on-screen confirmation on any Android version (only *app*-initiated installs do).
+
+#### Built in: Advanced install (1.29.0)
+
+The integration can do that ADB install itself, in pure Python, so it also works on Home Assistant OS
+(no `adb` binary needed). Per TV, open the integration's options (the gear icon) and expand
+**Advanced install**:
+
+| Field | Values | Default |
+|---|---|---|
+| Install method | **App self-update** (as before) / **Auto** (app on Android 12+, ADB below) / **ADB** | App self-update |
+| ADB port | the TV's network-debugging port | 5555 |
+| ADB key | **PiPup's own key** (`.storage/pipup_adbkey`, created on first use) / **the Android TV integration's key** (`.storage/androidtv_adbkey`) | own |
+
+Turn on **network debugging (ADB)** in the TV's developer options first. Choosing Auto or ADB tests the
+connection when you save. With a key the TV does not know yet, the TV shows *Allow debugging from this
+computer?* and the options ask you to tick **Always allow** and press OK. A TV that already trusts the
+Android TV integration needs nothing: pick that integration's key.
+
+After that, **Install** on the update entity installs over ADB: the latest release's APK is downloaded
+(and checked against the release's sha256), pushed to the TV, installed with `pm install -r`, and
+the app-ops a reinstall resets are granted again (overlay, install, `android:auto_start` on TCL, the
+accessibility service if it was on). The app's service is started in the background; only if it does not
+come back (TCL's vendor guard) is the app opened briefly, and the TV goes back to sleep if it was
+asleep. It never uninstalls the app (that would lose its device id): a build with another signature is
+reported instead. The update entity's `install_method` attribute shows `app` or `adb`, and
+`requires_remote` is `false` with ADB. Automatic nightly updates follow in a later version
+([#49](https://github.com/mhoogenbosch/ha-pipup/issues/49)).
+
+Network debugging gives shell access to anyone on the LAN who is allowed by the TV, so it is opt-in and
+off by default; the integration does nothing beyond what `install.sh` does.
+
+#### Alternative: install.sh
+
 The `install.sh` shipped with each [app release](https://github.com/mhoogenbosch/PiPup/releases) does the
 whole thing — download the latest APK, `adb install -r`, re-grant the two app-ops that every reinstall
 resets, and start the service. Call it from Home Assistant with a `shell_command`:

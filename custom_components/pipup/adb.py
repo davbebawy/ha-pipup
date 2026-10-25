@@ -1,0 +1,382 @@
+"""Built-in ADB install for TVs where the app cannot update itself silently.
+
+Android < 12 forces an on-screen confirmation for any app-initiated install (PiPup
+#76). A shell-initiated `pm install -r` never asks, which is why `install.sh` works -
+but Home Assistant OS has no `adb` binary. This module does the same steps in pure
+Python with adb-shell, the library core's Android TV integration uses.
+
+One connection per install, opened and closed here: nothing stays connected, so it
+never competes with the Android TV integration's own connection for longer than the
+install takes.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import os
+from dataclasses import dataclass
+from io import BytesIO
+from typing import Any
+
+import aiohttp
+from adb_shell.adb_device_async import AdbDeviceTcpAsync
+from adb_shell.auth.keygen import keygen
+from adb_shell.auth.sign_pythonrsa import PythonRSASigner
+from adb_shell.exceptions import (
+    AdbCommandFailureException,
+    AdbConnectionError,
+    AdbTimeoutError,
+    DeviceAuthError,
+    InvalidChecksumError,
+    InvalidCommandError,
+    InvalidResponseError,
+    PushFailedError,
+    TcpTimeoutException,
+)
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import STORAGE_DIR
+
+from .const import (
+    ADB_KEY_ANDROIDTV,
+    DOMAIN,
+    CONF_ADB_KEY,
+    CONF_ADB_PORT,
+    CONF_INSTALL_METHOD,
+    DEFAULT_ADB_PORT,
+    DEFAULT_INSTALL_METHOD,
+    INSTALL_METHOD_ADB,
+    INSTALL_METHOD_APP,
+    INSTALL_METHOD_AUTO,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+PACKAGE = "nl.rogro82.pipup"
+SERVICE_COMPONENT = f"{PACKAGE}/.PiPupService"
+ACTIVITY_COMPONENT = f"{PACKAGE}/.MainActivity"
+ACCESSIBILITY_COMPONENT = f"{PACKAGE}/{PACKAGE}.PiPupAccessibilityService"
+DEVICE_APK = "/data/local/tmp/pipup.apk"
+
+OWN_KEY = "pipup_adbkey"
+ANDROIDTV_KEY = "androidtv_adbkey"
+
+# connect: the TCP part; an unknown key additionally waits AUTH_TIMEOUT for the
+# "Allow debugging?" answer on the TV
+CONNECT_TIMEOUT = 10.0
+# How long one command may stay silent. Passed as adb-shell's *transport* timeout:
+# that is the wait for the next bytes, and `pm install` prints nothing until it is
+# done (~5-20 s for an 8 MB APK on a TV). The read timeout stays at the library
+# default on purpose: it is only checked after a packet arrived, and when a TV
+# closes the socket adb-shell spins on the empty read until it expires - 10 s of
+# a blocked event loop rather than two minutes.
+SHELL_TIMEOUT = 120.0
+# everything adb-shell raises while talking to a device, plus socket errors
+_ADB_ERRORS = (
+    AdbCommandFailureException,
+    AdbConnectionError,
+    AdbTimeoutError,
+    InvalidChecksumError,
+    InvalidCommandError,
+    InvalidResponseError,
+    PushFailedError,
+    TcpTimeoutException,
+    OSError,
+)
+# shared APK downloads, keyed by URL: N TVs = one download
+_APK_CACHE_KEY = "apk_cache"
+_APK_LOCK_KEY = "apk_lock"
+_KEY_LOCK_KEY = "adb_key_lock"
+
+
+# what the user reads when an ADB install fails (Install button, log)
+REASONS: dict[str, str] = {
+    "cannot_connect": "cannot reach ADB on the TV (is network debugging on?)",
+    "not_authorized": (
+        "the TV did not allow debugging from Home Assistant: open the integration's "
+        "options, Advanced install, and save to get the prompt again"
+    ),
+    "no_androidtv_key": "the Android TV integration's ADB key does not exist",
+    "key_unreadable": "the ADB key file cannot be read",
+    "connection_lost": "the ADB connection dropped",
+    "push_failed": "copying the APK to the TV failed",
+    "signature_mismatch": (
+        "another build of PiPup with a different signature is installed; it has to "
+        "be uninstalled by hand (this loses the app's device id)"
+    ),
+    "install_failed": "pm install failed",
+    "release_unavailable": "could not fetch the latest release (offline or rate limited?)",
+    "no_apk": "the latest release has no APK",
+    "download_failed": "downloading the APK failed",
+    "checksum_mismatch": "the downloaded APK does not match the release's sha256",
+    "app_not_back": "the app did not start again after the install",
+}
+
+
+class AdbError(Exception):
+    """ADB install failed; `reason` is a key of REASONS."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        message = REASONS.get(reason, reason)
+        super().__init__(f"{message}: {detail}" if detail else message)
+        self.reason = reason
+        self.detail = detail
+
+
+def effective_method(options: dict[str, Any], data: dict[str, Any]) -> str:
+    """App or ADB for this TV: Auto = app on Android 12+ (silent), ADB below.
+
+    The default stays the app's self-update: ADB needs network debugging and an
+    accepted prompt on the TV, so it is only used once someone chose it (and the
+    options flow tested it). `update.silent` from the app is authoritative (app >=
+    0.12.1); older apps only report the Android version. Unknown = app.
+    """
+    method = options.get(CONF_INSTALL_METHOD, DEFAULT_INSTALL_METHOD)
+    if method != INSTALL_METHOD_AUTO:
+        return method
+    silent = (data.get("update") or {}).get("silent")
+    if silent is None:
+        android = str((data.get("device") or {}).get("android") or "")
+        major = android.split(".")[0]
+        if not major.isdigit():
+            return INSTALL_METHOD_APP
+        silent = int(major) >= 12
+    return INSTALL_METHOD_APP if silent else INSTALL_METHOD_ADB
+
+
+def _load_signer(path: str) -> PythonRSASigner:
+    """Read (and if needed create) a key pair. Blocking: run in the executor."""
+    if not os.path.isfile(path):
+        keygen(path)
+        # keygen writes with the process umask; the private key is for us alone
+        os.chmod(path, 0o600)
+    return PythonRSASigner.FromRSAKeyPath(path)
+
+
+async def async_get_signer(hass: HomeAssistant, which: str) -> PythonRSASigner:
+    """The key ha-pipup signs with: its own by default, or the Android TV one.
+
+    The Android TV key is only read, never created: if that integration is not set
+    up there is nothing to reuse, and creating its file would confuse it later.
+    """
+    if which == ADB_KEY_ANDROIDTV:
+        path = hass.config.path(STORAGE_DIR, ANDROIDTV_KEY)
+        if not await hass.async_add_executor_job(os.path.isfile, path):
+            raise AdbError("no_androidtv_key")
+    else:
+        path = hass.config.path(STORAGE_DIR, OWN_KEY)
+    # two TVs on first use must not both generate a key: one would then trust a
+    # public key that the other overwrote
+    lock = hass.data.setdefault(DOMAIN, {}).setdefault(_KEY_LOCK_KEY, asyncio.Lock())
+    async with lock:
+        try:
+            return await hass.async_add_executor_job(_load_signer, path)
+        except Exception as err:  # noqa: BLE001 - only file parsing happens here
+            # a missing .pub next to the key, a damaged or unreadable file (rsa,
+            # pyasn1 and cryptography each raise their own parse errors)
+            raise AdbError("key_unreadable", f"{path}: {err}") from err
+
+
+class PiPupAdb:
+    """One ADB session to a TV; use as `async with`."""
+
+    def __init__(
+        self, hass: HomeAssistant, host: str, options: dict[str, Any]
+    ) -> None:
+        self._hass = hass
+        self._host = host
+        self._port = int(options.get(CONF_ADB_PORT) or DEFAULT_ADB_PORT)
+        self._key = options.get(CONF_ADB_KEY)
+        self._device: AdbDeviceTcpAsync | None = None
+
+    async def connect(self, auth_timeout: float) -> None:
+        """Connect, mapping the failures to what the user has to fix.
+
+        adb-shell raises timeouts both for "nothing listens" and for "nobody
+        answered the prompt". The auth callback tells them apart: it only runs once
+        the TV rejected our signature and is showing "Allow debugging?".
+        """
+        signer = await async_get_signer(self._hass, self._key)
+        device = AdbDeviceTcpAsync(
+            self._host, self._port, default_transport_timeout_s=CONNECT_TIMEOUT
+        )
+        prompted = False
+
+        def _prompted(_device) -> None:
+            nonlocal prompted
+            prompted = True
+
+        try:
+            await device.connect(
+                rsa_keys=[signer],
+                auth_timeout_s=auth_timeout,
+                auth_callback=_prompted,
+            )
+        except (DeviceAuthError, InvalidResponseError) as err:
+            await device.close()
+            raise AdbError("not_authorized", str(err)) from err
+        except _ADB_ERRORS as err:
+            await device.close()
+            if prompted:
+                raise AdbError("not_authorized", str(err)) from err
+            raise AdbError("cannot_connect", str(err)) from err
+        except BaseException:
+            # cancelled or something unforeseen: never leave the socket open
+            await device.close()
+            raise
+        self._device = device
+
+    async def __aenter__(self) -> PiPupAdb:
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        if self._device is not None:
+            await self._device.close()
+            self._device = None
+
+    async def shell(self, command: str) -> str:
+        """Run one shell command, output stripped."""
+        assert self._device is not None
+        try:
+            out = await self._device.shell(
+                command, transport_timeout_s=SHELL_TIMEOUT, timeout_s=SHELL_TIMEOUT
+            )
+        except _ADB_ERRORS as err:
+            raise AdbError("connection_lost", str(err)) from err
+        return (out or "").strip()
+
+    async def _remove_apk(self) -> None:
+        """Best effort: never let the clean-up hide the error that got us here."""
+        try:
+            await self.shell(f"rm -f {DEVICE_APK}")
+        except AdbError as err:
+            _LOGGER.debug("Could not remove %s: %s", DEVICE_APK, err)
+
+    async def install(self, apk: bytes) -> None:
+        """`install.sh`, minus the parts that need a human: install + app-ops."""
+        assert self._device is not None
+        # read before the install: whether the user had the accessibility service on
+        accessibility = await self.shell(
+            "settings get secure enabled_accessibility_services"
+        )
+        try:
+            try:
+                await self._device.push(
+                    BytesIO(apk), DEVICE_APK, transport_timeout_s=SHELL_TIMEOUT
+                )
+            except _ADB_ERRORS as err:
+                # also a full /data/local/tmp (FAIL from the sync service)
+                raise AdbError("push_failed", str(err)) from err
+            out = await self.shell(f"pm install -r {DEVICE_APK}")
+        finally:
+            # also after a failed push: a partial APK must not stay on the TV
+            await self._remove_apk()
+        if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out:
+            # never uninstall to get past this: it would wipe the app's device id
+            raise AdbError("signature_mismatch", out)
+        if "Success" not in out:
+            raise AdbError("install_failed", out)
+
+        # the app-ops a reinstall resets and the app cannot set itself
+        await self.shell(f"appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow")
+        await self.shell(f"appops set {PACKAGE} REQUEST_INSTALL_PACKAGES allow")
+        # TCL only; elsewhere "Unknown operation string", which is fine
+        await self.shell(f"cmd appops set {PACKAGE} android:auto_start allow")
+        if PACKAGE in accessibility:
+            current = await self.shell("settings get secure enabled_accessibility_services")
+            if PACKAGE not in current:
+                merged = (
+                    ACCESSIBILITY_COMPONENT
+                    if current in ("", "null")
+                    else f"{current}:{ACCESSIBILITY_COMPONENT}"
+                )
+                await self.shell(f"settings put secure enabled_accessibility_services {merged}")
+                await self.shell("settings put secure accessibility_enabled 1")
+
+    async def start_service(self) -> None:
+        """Start the service in the background: does not touch the screen."""
+        await self.shell(f"am start-foreground-service -n {SERVICE_COMPONENT}")
+
+    async def start_activity(self) -> None:
+        """Fallback for a vendor guard that froze the background start (TCL).
+
+        Wakes the TV, opens the app, goes Home, and puts the TV back to sleep if it
+        was asleep - the same as `install.sh --wake`, plus the way back. Only on a
+        positive "Asleep"/"Dozing": a screensaver (Dreaming) or an answer we do not
+        understand may be someone watching, and that TV must stay on.
+        """
+        power = await self.shell("dumpsys power | grep mWakefulness=")
+        asleep = any(
+            f"mWakefulness={state}" in power for state in ("Asleep", "Dozing")
+        )
+        await self.shell("input keyevent KEYCODE_WAKEUP")
+        await self.shell(f"am start -n {ACTIVITY_COMPONENT}")
+        await asyncio.sleep(3)
+        await self.shell("input keyevent KEYCODE_HOME")
+        if asleep:
+            await self.shell("input keyevent KEYCODE_SLEEP")
+
+
+@dataclass
+class ReleaseApk:
+    """The APK asset of a release, as the releases API describes it."""
+
+    url: str
+    sha256: str | None
+
+
+def release_apk(release: dict[str, Any]) -> ReleaseApk | None:
+    """Pick the APK asset; `digest` ("sha256:<hex>") is set by GitHub since 2025."""
+    for asset in release.get("assets") or []:
+        url = asset.get("browser_download_url") or ""
+        if url.endswith(".apk"):
+            digest = asset.get("digest") or ""
+            sha256 = digest[7:].lower() if digest.startswith("sha256:") else None
+            return ReleaseApk(url, sha256)
+    return None
+
+
+async def async_download_apk(hass: HomeAssistant, apk: ReleaseApk) -> bytes:
+    """Download once, verify, and share the bytes between TVs."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    cache: dict[str, bytes] = domain_data.setdefault(_APK_CACHE_KEY, {})
+    lock = domain_data.setdefault(_APK_LOCK_KEY, asyncio.Lock())
+    async with lock:
+        if apk.url in cache:
+            return cache[apk.url]
+        session = async_get_clientsession(hass)
+        try:
+            async with session.get(
+                apk.url, timeout=aiohttp.ClientTimeout(total=300)
+            ) as resp:
+                if resp.status != 200:
+                    raise AdbError("download_failed", f"HTTP {resp.status}")
+                data = await resp.read()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise AdbError("download_failed", str(err)) from err
+        if apk.sha256 is not None:
+            actual = await hass.async_add_executor_job(_sha256, data)
+            if actual != apk.sha256:
+                raise AdbError("checksum_mismatch", f"{actual} != {apk.sha256}")
+        else:
+            # a LAN mirror's releases.json may lack digests; pm install still refuses
+            # an APK with another signature, so this is integrity, not authenticity
+            _LOGGER.warning("No sha256 digest for %s; installing unverified", apk.url)
+        # only the latest APK is worth keeping
+        cache.clear()
+        cache[apk.url] = data
+        return data
+
+
+def forget_apk(hass: HomeAssistant) -> None:
+    """Drop the cached APK (~8 MB) once nothing needs it any more."""
+    hass.data.get(DOMAIN, {}).get(_APK_CACHE_KEY, {}).clear()
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
