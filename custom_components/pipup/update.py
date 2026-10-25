@@ -26,6 +26,7 @@ from .adb import (
     PiPupAdb,
     async_download_apk,
     effective_method,
+    forget_apk,
     release_apk,
 )
 from .api import PiPupError
@@ -357,7 +358,9 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         self.async_write_ha_state()
         try:
             release = await _latest_release(self.hass, self._source)
-            apk = release_apk(release) if release else None
+            if not release:
+                raise AdbError("release_unavailable")
+            apk = release_apk(release)
             if apk is None:
                 raise AdbError("no_apk")
             data = await async_download_apk(self.hass, apk)
@@ -378,6 +381,13 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             self.async_write_ha_state()
             _LOGGER.warning("ADB install of PiPup on %s failed: %s", host, err)
             raise HomeAssistantError(f"ADB install failed: {err}") from err
+        except BaseException:
+            # anything unforeseen: no Install button stuck "in progress" for 15 min
+            self._install_requested_at = None
+            self.async_write_ha_state()
+            raise
+        # one TV per press for now: nothing else needs the ~8 MB any more
+        forget_apk(self.hass)
         await self.coordinator.async_refresh()
         _LOGGER.info(
             "PiPup app on %s updated %s → %s (ADB)",

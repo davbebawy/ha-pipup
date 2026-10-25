@@ -24,10 +24,14 @@ from adb_shell.adb_device_async import AdbDeviceTcpAsync
 from adb_shell.auth.keygen import keygen
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 from adb_shell.exceptions import (
+    AdbCommandFailureException,
     AdbConnectionError,
     AdbTimeoutError,
     DeviceAuthError,
+    InvalidChecksumError,
+    InvalidCommandError,
     InvalidResponseError,
+    PushFailedError,
     TcpTimeoutException,
 )
 
@@ -62,11 +66,29 @@ ANDROIDTV_KEY = "androidtv_adbkey"
 # connect: the TCP part; an unknown key additionally waits AUTH_TIMEOUT for the
 # "Allow debugging?" answer on the TV
 CONNECT_TIMEOUT = 10.0
-# one shell command; `pm install` of an 8 MB APK takes ~5-20 s on a TV
+# How long one command may stay silent. Passed as adb-shell's *transport* timeout:
+# that is the wait for the next bytes, and `pm install` prints nothing until it is
+# done (~5-20 s for an 8 MB APK on a TV). The read timeout stays at the library
+# default on purpose: it is only checked after a packet arrived, and when a TV
+# closes the socket adb-shell spins on the empty read until it expires - 10 s of
+# a blocked event loop rather than two minutes.
 SHELL_TIMEOUT = 120.0
+# everything adb-shell raises while talking to a device, plus socket errors
+_ADB_ERRORS = (
+    AdbCommandFailureException,
+    AdbConnectionError,
+    AdbTimeoutError,
+    InvalidChecksumError,
+    InvalidCommandError,
+    InvalidResponseError,
+    PushFailedError,
+    TcpTimeoutException,
+    OSError,
+)
 # shared APK downloads, keyed by URL: N TVs = one download
 _APK_CACHE_KEY = "apk_cache"
 _APK_LOCK_KEY = "apk_lock"
+_KEY_LOCK_KEY = "adb_key_lock"
 
 
 # what the user reads when an ADB install fails (Install button, log)
@@ -77,6 +99,7 @@ REASONS: dict[str, str] = {
         "options, Advanced install, and save to get the prompt again"
     ),
     "no_androidtv_key": "the Android TV integration's ADB key does not exist",
+    "key_unreadable": "the ADB key file cannot be read",
     "connection_lost": "the ADB connection dropped",
     "push_failed": "copying the APK to the TV failed",
     "signature_mismatch": (
@@ -84,6 +107,7 @@ REASONS: dict[str, str] = {
         "be uninstalled by hand (this loses the app's device id)"
     ),
     "install_failed": "pm install failed",
+    "release_unavailable": "could not fetch the latest release (offline or rate limited?)",
     "no_apk": "the latest release has no APK",
     "download_failed": "downloading the APK failed",
     "checksum_mismatch": "the downloaded APK does not match the release's sha256",
@@ -126,6 +150,8 @@ def _load_signer(path: str) -> PythonRSASigner:
     """Read (and if needed create) a key pair. Blocking: run in the executor."""
     if not os.path.isfile(path):
         keygen(path)
+        # keygen writes with the process umask; the private key is for us alone
+        os.chmod(path, 0o600)
     return PythonRSASigner.FromRSAKeyPath(path)
 
 
@@ -141,7 +167,15 @@ async def async_get_signer(hass: HomeAssistant, which: str) -> PythonRSASigner:
             raise AdbError("no_androidtv_key")
     else:
         path = hass.config.path(STORAGE_DIR, OWN_KEY)
-    return await hass.async_add_executor_job(_load_signer, path)
+    # two TVs on first use must not both generate a key: one would then trust a
+    # public key that the other overwrote
+    lock = hass.data.setdefault(DOMAIN, {}).setdefault(_KEY_LOCK_KEY, asyncio.Lock())
+    async with lock:
+        try:
+            return await hass.async_add_executor_job(_load_signer, path)
+        except (OSError, ValueError) as err:
+            # a missing .pub next to the key, a damaged or unreadable file
+            raise AdbError("key_unreadable", f"{path}: {err}") from err
 
 
 class PiPupAdb:
@@ -182,11 +216,15 @@ class PiPupAdb:
         except (DeviceAuthError, InvalidResponseError) as err:
             await device.close()
             raise AdbError("not_authorized", str(err)) from err
-        except (AdbTimeoutError, TcpTimeoutException, AdbConnectionError, OSError) as err:
+        except _ADB_ERRORS as err:
             await device.close()
             if prompted:
                 raise AdbError("not_authorized", str(err)) from err
             raise AdbError("cannot_connect", str(err)) from err
+        except BaseException:
+            # cancelled or something unforeseen: never leave the socket open
+            await device.close()
+            raise
         self._device = device
 
     async def __aenter__(self) -> PiPupAdb:
@@ -205,11 +243,18 @@ class PiPupAdb:
         assert self._device is not None
         try:
             out = await self._device.shell(
-                command, read_timeout_s=SHELL_TIMEOUT, timeout_s=SHELL_TIMEOUT
+                command, transport_timeout_s=SHELL_TIMEOUT, timeout_s=SHELL_TIMEOUT
             )
-        except (AdbTimeoutError, TcpTimeoutException, AdbConnectionError, OSError) as err:
+        except _ADB_ERRORS as err:
             raise AdbError("connection_lost", str(err)) from err
         return (out or "").strip()
+
+    async def _remove_apk(self) -> None:
+        """Best effort: never let the clean-up hide the error that got us here."""
+        try:
+            await self.shell(f"rm -f {DEVICE_APK}")
+        except AdbError as err:
+            _LOGGER.debug("Could not remove %s: %s", DEVICE_APK, err)
 
     async def install(self, apk: bytes) -> None:
         """`install.sh`, minus the parts that need a human: install + app-ops."""
@@ -219,13 +264,17 @@ class PiPupAdb:
             "settings get secure enabled_accessibility_services"
         )
         try:
-            await self._device.push(BytesIO(apk), DEVICE_APK, read_timeout_s=SHELL_TIMEOUT)
-        except (AdbTimeoutError, TcpTimeoutException, AdbConnectionError, OSError) as err:
-            raise AdbError("push_failed", str(err)) from err
-        try:
+            try:
+                await self._device.push(
+                    BytesIO(apk), DEVICE_APK, transport_timeout_s=SHELL_TIMEOUT
+                )
+            except _ADB_ERRORS as err:
+                # also a full /data/local/tmp (FAIL from the sync service)
+                raise AdbError("push_failed", str(err)) from err
             out = await self.shell(f"pm install -r {DEVICE_APK}")
         finally:
-            await self.shell(f"rm -f {DEVICE_APK}")
+            # also after a failed push: a partial APK must not stay on the TV
+            await self._remove_apk()
         if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out:
             # never uninstall to get past this: it would wipe the app's device id
             raise AdbError("signature_mismatch", out)
@@ -256,10 +305,14 @@ class PiPupAdb:
         """Fallback for a vendor guard that froze the background start (TCL).
 
         Wakes the TV, opens the app, goes Home, and puts the TV back to sleep if it
-        was asleep - the same as `install.sh --wake`, plus the way back.
+        was asleep - the same as `install.sh --wake`, plus the way back. Only on a
+        positive "Asleep"/"Dozing": a screensaver (Dreaming) or an answer we do not
+        understand may be someone watching, and that TV must stay on.
         """
-        power = await self.shell("dumpsys power | grep -m1 mWakefulness=")
-        asleep = "Awake" not in power
+        power = await self.shell("dumpsys power | grep mWakefulness=")
+        asleep = any(
+            f"mWakefulness={state}" in power for state in ("Asleep", "Dozing")
+        )
         await self.shell("input keyevent KEYCODE_WAKEUP")
         await self.shell(f"am start -n {ACTIVITY_COMPONENT}")
         await asyncio.sleep(3)
@@ -306,7 +359,7 @@ async def async_download_apk(hass: HomeAssistant, apk: ReleaseApk) -> bytes:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise AdbError("download_failed", str(err)) from err
         if apk.sha256 is not None:
-            actual = hashlib.sha256(data).hexdigest()
+            actual = await hass.async_add_executor_job(_sha256, data)
             if actual != apk.sha256:
                 raise AdbError("checksum_mismatch", f"{actual} != {apk.sha256}")
         else:
@@ -317,3 +370,12 @@ async def async_download_apk(hass: HomeAssistant, apk: ReleaseApk) -> bytes:
         cache.clear()
         cache[apk.url] = data
         return data
+
+
+def forget_apk(hass: HomeAssistant) -> None:
+    """Drop the cached APK (~8 MB) once nothing needs it any more."""
+    hass.data.get(DOMAIN, {}).get(_APK_CACHE_KEY, {}).clear()
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()

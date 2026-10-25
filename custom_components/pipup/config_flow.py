@@ -379,6 +379,8 @@ class PiPupOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage the options."""
         errors: dict[str, str] = {}
+        # after an ADB error: show what was entered, not what is stored
+        entered: dict[str, Any] | None = None
         if user_input is not None and not _UPDATE_SOURCE_RE.match(
             (user_input.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE).strip()
         ):
@@ -482,8 +484,9 @@ class PiPupOptionsFlow(OptionsFlow):
                     errors["base"] = error
             if not errors:
                 return self.async_create_entry(title="", data=options)
+            entered = options
 
-        opts = self.config_entry.options
+        opts = entered or self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(

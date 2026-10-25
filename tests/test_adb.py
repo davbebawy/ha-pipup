@@ -382,3 +382,265 @@ async def test_default_keeps_app_self_update(hass: HomeAssistant) -> None:
     finally:
         for p in patchers:
             p.stop()
+
+
+# --- review fixes (PR #50)
+
+
+async def test_shell_waits_for_silent_command(hass: HomeAssistant) -> None:
+    """`pm install` prints nothing for a while: the transport timeout covers that.
+
+    The read timeout is left at adb-shell's default: a closed socket makes the
+    library spin until it expires, so a long one would block the event loop.
+    """
+    device = _fake_device({"pm install": "Success"})
+    adb = await _adb_session(hass, device)
+    await adb.install(APK)
+    for call in device.shell.await_args_list:
+        assert call.kwargs["transport_timeout_s"] >= 60
+        assert "read_timeout_s" not in call.kwargs
+    assert device.push.await_args.kwargs["transport_timeout_s"] >= 60
+    assert "read_timeout_s" not in device.push.await_args.kwargs
+
+
+async def test_install_order(hass: HomeAssistant) -> None:
+    """Push, install, remove, then the app-ops - never app-ops before the install."""
+    device = _fake_device({"pm install": "Success"})
+    adb = await _adb_session(hass, device)
+    await adb.install(APK)
+    calls = device.calls
+    pm = calls.index("pm install -r /data/local/tmp/pipup.apk")
+    rm = calls.index("rm -f /data/local/tmp/pipup.apk")
+    overlay = calls.index("appops set nl.rogro82.pipup SYSTEM_ALERT_WINDOW allow")
+    assert pm < rm < overlay
+
+
+async def test_push_failure_is_mapped_and_cleaned_up(hass: HomeAssistant) -> None:
+    """A full /data/local/tmp (FAIL from sync) is push_failed; the partial APK goes."""
+    from adb_shell.exceptions import PushFailedError
+
+    device = _fake_device({})
+    device.push.side_effect = PushFailedError("No space left on device")
+    adb = await _adb_session(hass, device)
+    with pytest.raises(AdbError) as err:
+        await adb.install(APK)
+    assert err.value.reason == "push_failed"
+    assert "rm -f /data/local/tmp/pipup.apk" in device.calls
+    assert not any(c.startswith("pm install") for c in device.calls)
+
+
+async def test_cleanup_does_not_hide_the_real_error(hass: HomeAssistant) -> None:
+    """The connection dies during pm install: that error is reported, not the rm's."""
+    from adb_shell.exceptions import TcpTimeoutException
+
+    device = _fake_device({})
+    seen: list[str] = []
+
+    async def shell(command, **_):
+        seen.append(command)
+        if command.startswith(("pm install", "rm ")):
+            raise TcpTimeoutException("gone")
+        return ""
+
+    device.shell.side_effect = shell
+    adb = await _adb_session(hass, device)
+    with pytest.raises(AdbError) as err:
+        await adb.install(APK)
+    assert err.value.reason == "connection_lost"
+    assert "rm -f /data/local/tmp/pipup.apk" in seen
+    assert not any(c.startswith("appops") for c in seen)
+
+
+async def test_connect_closes_socket_on_unexpected_error(hass: HomeAssistant) -> None:
+    """Library errors outside the known set still close the transport."""
+    from adb_shell.exceptions import InvalidCommandError
+
+    for exc, expected in ((InvalidCommandError("bad"), AdbError), (RuntimeError("x"), RuntimeError)):
+        device = _fake_device({})
+        device.connect.side_effect = exc
+        with pytest.raises(expected):
+            await _adb_session(hass, device)
+        device.close.assert_awaited()
+
+
+@pytest.mark.parametrize(
+    ("power", "sleeps"),
+    [
+        ("  mWakefulness=Asleep", True),
+        ("  mWakefulness=Dozing", True),
+        ("  mWakefulness=Awake", False),
+        ("  mWakefulness=Dreaming", False),  # screensaver: someone may be watching
+        ("", False),  # no answer: leave the TV on
+        ("/system/bin/sh: dumpsys: inaccessible or not found", False),
+    ],
+)
+async def test_activity_fallback_only_resleeps_a_sleeping_tv(
+    hass: HomeAssistant, power: str, sleeps: bool
+) -> None:
+    """The fallback switches a TV off again only when it positively was asleep."""
+    device = _fake_device({"dumpsys power": power})
+    adb = await _adb_session(hass, device)
+    with patch("custom_components.pipup.adb.asyncio.sleep", AsyncMock()):
+        await adb.start_activity()
+    assert "input keyevent KEYCODE_WAKEUP" in device.calls
+    assert ("input keyevent KEYCODE_SLEEP" in device.calls) is sleeps
+
+
+async def test_own_key_private_and_created_once(hass: HomeAssistant, tmp_path) -> None:
+    """The own key is 0600, and two first uses at once generate it only once."""
+    import asyncio
+    import os
+    import stat
+
+    from custom_components.pipup import adb as adb_mod
+
+    with (
+        patch.object(hass.config, "config_dir", str(tmp_path)),
+        patch.object(adb_mod, "keygen", wraps=adb_mod.keygen) as keygen,
+    ):
+        os.makedirs(tmp_path / ".storage")
+        await asyncio.gather(
+            adb_mod.async_get_signer(hass, "own"), adb_mod.async_get_signer(hass, "own")
+        )
+    path = tmp_path / ".storage" / "pipup_adbkey"
+    assert keygen.call_count == 1
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+    with pytest.raises(AdbError) as err:
+        with patch.object(hass.config, "config_dir", str(tmp_path)):
+            await adb_mod.async_get_signer(hass, "androidtv")
+    assert err.value.reason == "no_androidtv_key"
+
+    # a key without its .pub (found on a real host): a clear error, not a traceback
+    (tmp_path / ".storage" / "androidtv_adbkey").write_bytes(path.read_bytes())
+    with pytest.raises(AdbError) as err:
+        with patch.object(hass.config, "config_dir", str(tmp_path)):
+            await adb_mod.async_get_signer(hass, "androidtv")
+    assert err.value.reason == "key_unreadable"
+
+
+async def test_release_unavailable_is_not_no_apk(hass: HomeAssistant) -> None:
+    """GitHub unreachable: say so, instead of 'the release has no APK'."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    try:
+        from custom_components.pipup import update
+
+        update._latest_release.return_value = None
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        with (
+            patch("custom_components.pipup.update.PiPupAdb", return_value=adb),
+            pytest.raises(HomeAssistantError, match="could not fetch the latest release"),
+        ):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        adb.connect.assert_not_awaited()
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_latest_release_none_when_source_down(hass: HomeAssistant, aioclient_mock) -> None:
+    """The real _latest_release returns None on a failed fetch (not a stale dict)."""
+    from custom_components.pipup.update import _latest_release
+
+    aioclient_mock.get(
+        "https://api.github.com/repos/mhoogenbosch/PiPup/releases/latest", status=403
+    )
+    assert await _latest_release(hass, "github:mhoogenbosch/PiPup") is None
+
+
+async def test_unexpected_error_clears_progress(hass: HomeAssistant) -> None:
+    """Not an AdbError: still no Install button stuck in progress."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    adb.install.side_effect = RuntimeError("library surprise")
+    try:
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        with (
+            patch("custom_components.pipup.update.PiPupAdb", return_value=adb),
+            pytest.raises(RuntimeError),
+        ):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        assert hass.states.get(entity_id).attributes["in_progress"] is False
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_apk_forgotten_after_install(hass: HomeAssistant, aioclient_mock) -> None:
+    """After a successful install the ~8 MB APK does not stay in memory."""
+    from custom_components.pipup import adb as adb_mod
+
+    aioclient_mock.get(APK_URL, content=APK)
+    await async_download_apk(hass, ReleaseApk(APK_URL, SHA))
+    assert hass.data[DOMAIN]["apk_cache"]
+    adb_mod.forget_apk(hass)
+    assert not hass.data[DOMAIN]["apk_cache"]
+
+
+async def test_options_error_keeps_entered_values(hass: HomeAssistant) -> None:
+    """ADB unreachable: the form shows what was entered, not the stored options."""
+    entry, patchers = await _setup(hass, dict(STATE))
+    test = AsyncMock(return_value="adb_cannot_connect")
+    try:
+        with patch(
+            "custom_components.pipup.config_flow.PiPupOptionsFlow._test_adb", test
+        ):
+            result = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"],
+                {"default_duration": 42, **_section(install_method="adb", adb_port=5556)},
+            )
+        assert result["errors"] == {"base": "adb_cannot_connect"}
+        schema = {str(k): k for k in result["data_schema"].schema}
+        assert schema["default_duration"].default() == 42
+        section_schema = result["data_schema"].schema[schema["advanced_install"]].schema.schema
+        defaults = {str(k): k.default() for k in section_schema}
+        assert defaults["install_method"] == "adb"
+        assert defaults["adb_port"] == 5556
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_section_round_trip_keeps_adb(hass: HomeAssistant) -> None:
+    """Saving an unrelated option with the section as stored keeps ADB, untested."""
+    options = {"install_method": "adb", "adb_port": 5555, "adb_key": "androidtv"}
+    entry, patchers = await _setup(hass, dict(STATE), options)
+    test = AsyncMock(return_value="adb_cannot_connect")
+    try:
+        with patch(
+            "custom_components.pipup.config_flow.PiPupOptionsFlow._test_adb", test
+        ):
+            result = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"],
+                {"default_duration": 7, **_section(install_method="adb", adb_key="androidtv")},
+            )
+        assert result["type"] == "create_entry"
+        test.assert_not_awaited()
+        assert entry.options["install_method"] == "adb"
+        assert entry.options["adb_key"] == "androidtv"
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def test_flow_errors_are_translated() -> None:
+    """Every error the options flow can show has a text in every language."""
+    import json
+    from pathlib import Path
+
+    from custom_components.pipup.adb import REASONS
+
+    connect_reasons = {"cannot_connect", "not_authorized", "no_androidtv_key", "key_unreadable"}
+    assert connect_reasons <= set(REASONS)
+    root = Path(__file__).parent.parent / "custom_components" / "pipup"
+    for path in [root / "strings.json", *sorted((root / "translations").glob("*.json"))]:
+        errors = json.loads(path.read_text(encoding="utf-8"))["options"]["error"]
+        for reason in connect_reasons:
+            assert f"adb_{reason}" in errors, (path.name, reason)

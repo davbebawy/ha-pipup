@@ -96,7 +96,8 @@
       "invalid_update_source": "Gebruik github:eigenaar/repo, een http(s)-map-URL met releases.json, of off.",
       "adb_cannot_connect": "ADB op de tv is niet bereikbaar. Zet netwerkfoutopsporing (ADB) aan in de ontwikkelaarsopties en controleer de poort.",
       "adb_not_authorized": "De tv heeft foutopsporing vanaf Home Assistant niet toegestaan.",
-      "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel."
+      "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel.",
+      "adb_key_unreadable": "Het ADB-sleutelbestand (of de .pub ervan) is niet leesbaar. Kies de andere sleutel, of verwijder het beschadigde bestand uit .storage."
     }
   },
   "entity": {

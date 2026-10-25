@@ -96,7 +96,8 @@
       "invalid_update_source": "Use github:owner/repo, an http(s) folder URL with releases.json, or off.",
       "adb_cannot_connect": "Cannot reach ADB on the TV. Turn on network debugging (ADB) in the developer options and check the port.",
       "adb_not_authorized": "The TV did not allow debugging from Home Assistant.",
-      "adb_no_androidtv_key": "The Android TV integration's ADB key does not exist. Choose the own key."
+      "adb_no_androidtv_key": "The Android TV integration's ADB key does not exist. Choose the own key.",
+      "adb_key_unreadable": "The ADB key file (or its .pub) cannot be read. Choose the other key, or remove the damaged file from .storage."
     }
   },
   "entity": {
