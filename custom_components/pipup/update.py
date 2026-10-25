@@ -541,7 +541,7 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         if self.state != STATE_ON or self.in_progress or self._auto_pending:
             return  # nothing to install (also: a skipped version), or already busy
         record = self._last_auto or {}
-        if record.get("result") == "success" and record.get("to") == self.latest_version:
+        if record.get("waiting_for_tv") and record.get("to") == self.latest_version:
             return  # installed, the app waits for the TV to be switched on (tv_in_use)
         data = self.coordinator.data
         if not self.coordinator.online or data.get("visible"):
@@ -576,6 +576,9 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
                     self._auto_result(
                         "success", before, "adb", REASONS["tv_in_use"], self.latest_version
                     )
+                    # remembered (and restored): no reinstall while the app waits
+                    self._last_auto["waiting_for_tv"] = True
+                    self.async_write_ha_state()
                 else:
                     self._auto_result(err.reason, before, "adb", err.detail)
                 return

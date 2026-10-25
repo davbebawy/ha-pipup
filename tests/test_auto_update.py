@@ -590,7 +590,9 @@ async def test_running_set_released(hass: HomeAssistant, freezer) -> None:
         assert not running()
 
         # pending again, then the entry unloads mid-run
-        tv["version"] = "0.29.2"
+        tv["version"] = "0.29.2"  # e.g. an older build reinstalled by hand
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
         await _at(freezer, 27, 3, 10)
         await _tick(entity, _fake_adb())
         assert running() == {entity.entity_id}
