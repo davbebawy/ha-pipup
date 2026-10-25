@@ -9,7 +9,7 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 
 ## [Unreleased]
 
-## [v1.30.0] — 2026-10-26 (automatic updates)
+## [v1.30.0] — 2026-10-25 (automatic updates)
 ### Added
 - **Automatic updates** in *Advanced install* (#49): a new app release is installed by itself inside a
   quiet window (default 03:00–05:00), one TV at a time, once a night, never while a popup is on screen,
