@@ -32,6 +32,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
+    TimeSelector,
 )
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util import slugify
@@ -45,7 +46,13 @@ from .const import (
     CONF_ADB_KEY,
     CONF_ADB_PORT,
     CONF_ADVANCED_INSTALL,
+    CONF_AUTO_UPDATE,
     CONF_INSTALL_METHOD,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_START,
+    INSTALL_METHOD_APP,
     DEFAULT_ADB_PORT,
     DEFAULT_INSTALL_METHOD,
     INSTALL_METHOD_ADB,
@@ -323,10 +330,12 @@ class OverlaySubentryFlow(ConfigSubentryFlow):
 # user was told to accept it waits long enough to press OK with the remote.
 ADB_TEST_AUTH_TIMEOUT = 2.0
 ADB_AUTHORIZE_AUTH_TIMEOUT = 30.0
+# the fields whose change re-tests ADB (the quiet window does not need that)
 _ADVANCED_INSTALL_DEFAULTS = {
     CONF_INSTALL_METHOD: DEFAULT_INSTALL_METHOD,
     CONF_ADB_PORT: DEFAULT_ADB_PORT,
     CONF_ADB_KEY: ADB_KEY_OWN,
+    CONF_AUTO_UPDATE: False,
 }
 
 _UPDATE_SOURCE_RE = re.compile(
@@ -340,11 +349,22 @@ class PiPupOptionsFlow(OptionsFlow):
     # options waiting for the ADB prompt to be accepted on the TV
     _pending: dict[str, Any]
 
+    def _device_data(self) -> dict[str, Any]:
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        return (coordinator.data if coordinator else None) or {}
+
     def _needs_adb(self, options: dict[str, Any]) -> bool:
         """Whether these options make the Install button use ADB on this TV."""
-        coordinator = getattr(self.config_entry, "runtime_data", None)
-        data = (coordinator.data if coordinator else None) or {}
-        return effective_method(options, data) == INSTALL_METHOD_ADB
+        return effective_method(options, self._device_data()) == INSTALL_METHOD_ADB
+
+    def _auto_update_needs_adb(self, options: dict[str, Any]) -> bool:
+        """Automatic updates with the app's own update on a TV that needs the remote."""
+        data = self._device_data()
+        return (
+            bool(options.get(CONF_AUTO_UPDATE))
+            and effective_method(options, data) == INSTALL_METHOD_APP
+            and (data.get("update") or {}).get("silent") is False
+        )
 
     async def _test_adb(self, options: dict[str, Any], auth_timeout: float) -> str | None:
         """Connect once; None when it works, else the error key."""
@@ -469,13 +489,19 @@ class PiPupOptionsFlow(OptionsFlow):
             )
             options[CONF_ADB_PORT] = int(advanced.get(CONF_ADB_PORT, DEFAULT_ADB_PORT))
             options[CONF_ADB_KEY] = advanced.get(CONF_ADB_KEY, ADB_KEY_OWN)
+            options[CONF_AUTO_UPDATE] = bool(advanced.get(CONF_AUTO_UPDATE, False))
+            options[CONF_QUIET_START] = advanced.get(CONF_QUIET_START, DEFAULT_QUIET_START)
+            options[CONF_QUIET_END] = advanced.get(CONF_QUIET_END, DEFAULT_QUIET_END)
             # Test ADB only when the section changed: a sleeping Fire TV has no
             # network at all, and that must not block saving a popup default.
             changed = any(
                 options[key] != self.config_entry.options.get(key, default)
                 for key, default in _ADVANCED_INSTALL_DEFAULTS.items()
             )
-            if changed and self._needs_adb(options):
+            if self._auto_update_needs_adb(options):
+                # the update would wait for a press on the remote, at night
+                errors["base"] = "auto_update_needs_adb"
+            elif changed and self._needs_adb(options):
                 error = await self._test_adb(options, ADB_TEST_AUTH_TIMEOUT)
                 if error == "adb_not_authorized":
                     self._pending = options
@@ -653,6 +679,18 @@ class PiPupOptionsFlow(OptionsFlow):
                                         mode=SelectSelectorMode.DROPDOWN,
                                     )
                                 ),
+                                vol.Required(
+                                    CONF_AUTO_UPDATE,
+                                    default=opts.get(CONF_AUTO_UPDATE, False),
+                                ): bool,
+                                vol.Required(
+                                    CONF_QUIET_START,
+                                    default=opts.get(CONF_QUIET_START, DEFAULT_QUIET_START),
+                                ): TimeSelector(),
+                                vol.Required(
+                                    CONF_QUIET_END,
+                                    default=opts.get(CONF_QUIET_END, DEFAULT_QUIET_END),
+                                ): TimeSelector(),
                             }
                         ),
                         {"collapsed": True},

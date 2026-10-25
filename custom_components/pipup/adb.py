@@ -112,6 +112,10 @@ REASONS: dict[str, str] = {
     "download_failed": "downloading the APK failed",
     "checksum_mismatch": "the downloaded APK does not match the release's sha256",
     "app_not_back": "the app did not start again after the install",
+    "tv_in_use": (
+        "the app did not start again by itself and the TV is in use, so it was not "
+        "opened; it starts the next time the TV is switched on"
+    ),
 }
 
 
@@ -302,6 +306,11 @@ class PiPupAdb:
         """Start the service in the background: does not touch the screen."""
         await self.shell(f"am start-foreground-service -n {SERVICE_COMPONENT}")
 
+    async def asleep(self) -> bool:
+        """True only on a positive "Asleep"/"Dozing": anything else may be in use."""
+        power = await self.shell("dumpsys power | grep mWakefulness=")
+        return any(f"mWakefulness={state}" in power for state in ("Asleep", "Dozing"))
+
     async def start_activity(self) -> None:
         """Fallback for a vendor guard that froze the background start (TCL).
 
@@ -310,10 +319,7 @@ class PiPupAdb:
         positive "Asleep"/"Dozing": a screensaver (Dreaming) or an answer we do not
         understand may be someone watching, and that TV must stay on.
         """
-        power = await self.shell("dumpsys power | grep mWakefulness=")
-        asleep = any(
-            f"mWakefulness={state}" in power for state in ("Asleep", "Dozing")
-        )
+        asleep = await self.asleep()
         await self.shell("input keyevent KEYCODE_WAKEUP")
         await self.shell(f"am start -n {ACTIVITY_COMPONENT}")
         await asyncio.sleep(3)
