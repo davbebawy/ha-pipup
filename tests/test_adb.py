@@ -1,0 +1,384 @@
+"""Advanced install: method choice, the options section, and the ADB install itself."""
+from __future__ import annotations
+
+import hashlib
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.pipup.adb import (
+    AdbError,
+    PiPupAdb,
+    ReleaseApk,
+    async_download_apk,
+    effective_method,
+    release_apk,
+)
+from custom_components.pipup.api import PiPupError
+from custom_components.pipup.const import DOMAIN
+
+APK = b"PK\x03\x04 fake apk"
+SHA = hashlib.sha256(APK).hexdigest()
+APK_URL = "https://github.com/mhoogenbosch/PiPup/releases/download/v0.30.0/PiPup.apk"
+RELEASE = {
+    "tag_name": "v0.30.0",
+    "assets": [
+        {"browser_download_url": APK_URL.replace(".apk", ".apk.sha256")},
+        {"browser_download_url": APK_URL, "digest": f"sha256:{SHA}"},
+    ],
+}
+AUTO = {"install_method": "auto"}
+STATE = {
+    "app": "PiPup",
+    "version": "0.29.2",
+    "id": "dev1",
+    "name": "Living Room",
+    "visible": False,
+    "popup": None,
+    "device": {"android": "11"},
+    "update": {"installing": False, "silent": False},
+}
+
+
+@pytest.mark.parametrize(
+    ("options", "data", "expected"),
+    [
+        ({}, {"update": {"silent": False}}, "app"),  # default: as before 1.29
+        (AUTO, {"update": {"silent": True}}, "app"),
+        (AUTO, {"update": {"silent": False}}, "adb"),
+        (AUTO, {"device": {"android": "11"}}, "adb"),
+        (AUTO, {"device": {"android": "14"}}, "app"),
+        (AUTO, {}, "app"),  # unknown: the app's own update
+        ({"install_method": "adb"}, {"update": {"silent": True}}, "adb"),
+        ({"install_method": "app"}, {"update": {"silent": False}}, "app"),
+    ],
+)
+def test_effective_method(options, data, expected) -> None:
+    """Default = app; Auto follows the app's `silent` flag, then the Android version."""
+    assert effective_method(options, data) == expected
+
+
+def test_release_apk_picks_apk_and_digest() -> None:
+    """The .apk asset, not the .sha256 beside it; digest without its prefix."""
+    apk = release_apk(RELEASE)
+    assert apk == ReleaseApk(APK_URL, SHA)
+    assert release_apk({"assets": []}) is None
+
+
+async def test_download_verified_and_shared(hass: HomeAssistant, aioclient_mock) -> None:
+    """One download for several TVs; a wrong checksum is refused."""
+    aioclient_mock.get(APK_URL, content=APK)
+    for _ in range(3):
+        assert await async_download_apk(hass, ReleaseApk(APK_URL, SHA)) == APK
+    assert aioclient_mock.call_count == 1
+
+    bad = APK_URL.replace("v0.30.0", "v0.30.1")
+    aioclient_mock.get(bad, content=b"tampered")
+    with pytest.raises(AdbError) as err:
+        await async_download_apk(hass, ReleaseApk(bad, SHA))
+    assert err.value.reason == "checksum_mismatch"
+
+
+def _fake_device(outputs: dict[str, str]) -> MagicMock:
+    """An AdbDeviceTcpAsync whose shell answers by command prefix."""
+    device = MagicMock()
+    device.connect = AsyncMock()
+    device.close = AsyncMock()
+    device.push = AsyncMock()
+    calls: list[str] = []
+
+    async def shell(command, **_):
+        calls.append(command)
+        for prefix, out in outputs.items():
+            if command.startswith(prefix):
+                return out
+        return ""
+
+    device.shell = AsyncMock(side_effect=shell)
+    device.calls = calls
+    return device
+
+
+async def _adb_session(hass: HomeAssistant, device: MagicMock) -> PiPupAdb:
+    with (
+        patch("custom_components.pipup.adb.AdbDeviceTcpAsync", return_value=device),
+        patch(
+            "custom_components.pipup.adb.async_get_signer",
+            AsyncMock(return_value=object()),
+        ),
+    ):
+        adb = PiPupAdb(hass, "192.168.1.14", {})
+        await adb.connect(1)
+    return adb
+
+
+async def test_install_steps(hass: HomeAssistant) -> None:
+    """install.sh's steps: push, pm install, remove, app-ops, accessibility back."""
+    access = "nl.rogro82.pipup/nl.rogro82.pipup.PiPupAccessibilityService"
+    device = _fake_device({"pm install": "Success"})
+    reads = iter([access, "null"])  # on before the install, reset by it
+
+    async def shell(command, **_):
+        device.calls.append(command)
+        if command.startswith("settings get"):
+            return next(reads)
+        return "Success" if command.startswith("pm install") else ""
+
+    device.shell.side_effect = shell
+    adb = await _adb_session(hass, device)
+    await adb.install(APK)
+    await adb.close()
+
+    device.push.assert_awaited_once()
+    assert device.push.await_args.args[1] == "/data/local/tmp/pipup.apk"
+    calls = device.calls
+    assert "pm install -r /data/local/tmp/pipup.apk" in calls
+    assert "rm -f /data/local/tmp/pipup.apk" in calls
+    assert "appops set nl.rogro82.pipup SYSTEM_ALERT_WINDOW allow" in calls
+    assert "appops set nl.rogro82.pipup REQUEST_INSTALL_PACKAGES allow" in calls
+    assert "cmd appops set nl.rogro82.pipup android:auto_start allow" in calls
+    assert f"settings put secure enabled_accessibility_services {access}" in calls
+    device.close.assert_awaited()
+
+
+async def test_install_never_uninstalls_on_signature_clash(hass: HomeAssistant) -> None:
+    """A different signature is reported, never 'fixed' by uninstalling."""
+    device = _fake_device(
+        {"pm install": "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]"}
+    )
+    adb = await _adb_session(hass, device)
+    with pytest.raises(AdbError) as err:
+        await adb.install(APK)
+    assert err.value.reason == "signature_mismatch"
+    assert not any("uninstall" in c for c in device.calls)
+    assert "rm -f /data/local/tmp/pipup.apk" in device.calls
+
+
+async def test_connect_errors(hass: HomeAssistant) -> None:
+    """Timeout after the prompt = not authorised; before it = cannot connect."""
+    from adb_shell.exceptions import TcpTimeoutException
+
+    async def refused(**_):
+        raise TcpTimeoutException("no answer")
+
+    async def unanswered(rsa_keys, auth_timeout_s, auth_callback):
+        auth_callback(None)
+        raise TcpTimeoutException("no answer")
+
+    for side_effect, reason in ((refused, "cannot_connect"), (unanswered, "not_authorized")):
+        device = _fake_device({})
+        device.connect.side_effect = side_effect
+        with pytest.raises(AdbError) as err:
+            await _adb_session(hass, device)
+        assert err.value.reason == reason
+        device.close.assert_awaited()
+
+
+async def _setup(hass: HomeAssistant, tv: dict, options: dict | None = None):
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="TV", unique_id="dev1",
+        data={"host": "192.168.1.14", "port": 7979}, options=options or {},
+    )
+    entry.add_to_hass(hass)
+    patchers = [
+        patch.multiple(
+            "custom_components.pipup.api.PiPupClient",
+            state=AsyncMock(side_effect=lambda *_: dict(tv)),
+            settings=AsyncMock(return_value={}),
+            update_app=AsyncMock(return_value=None),
+        ),
+        patch("custom_components.pipup.update._latest_release_tag",
+              AsyncMock(return_value="0.30.0")),
+        patch("custom_components.pipup.update._latest_release",
+              AsyncMock(return_value=RELEASE)),
+        patch("custom_components.pipup.update.async_download_apk",
+              AsyncMock(return_value=APK)),
+        patch("custom_components.pipup.update.ADB_APP_BACK_POLL", 0),
+        patch("custom_components.pipup.coordinator.POST_CALL_SETTLE_SECONDS", 0),
+    ]
+    for p in patchers:
+        p.start()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry, patchers
+
+
+def _fake_adb() -> MagicMock:
+    adb = MagicMock()
+    adb.__aenter__ = AsyncMock(return_value=adb)
+    adb.__aexit__ = AsyncMock(return_value=None)
+    adb.connect = AsyncMock()
+    adb.install = AsyncMock()
+    adb.start_service = AsyncMock()
+    adb.start_activity = AsyncMock()
+    return adb
+
+
+async def test_install_button_uses_adb_below_android_12(hass: HomeAssistant) -> None:
+    """Android 11 + Auto: Install goes over ADB, the app's self-update is not asked."""
+    tv = dict(STATE)
+    entry, patchers = await _setup(hass, tv, AUTO)
+    adb = _fake_adb()
+
+    async def installed(_apk):
+        tv["version"] = "0.30.0"
+
+    adb.install.side_effect = installed
+    try:
+        from custom_components.pipup.api import PiPupClient
+
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        attrs = hass.states.get(entity_id).attributes
+        assert attrs["install_method"] == "adb"
+        assert attrs["requires_remote"] is False
+        with patch("custom_components.pipup.update.PiPupAdb", return_value=adb):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        adb.install.assert_awaited_once_with(APK)
+        adb.start_service.assert_awaited_once()
+        adb.start_activity.assert_not_awaited()
+        PiPupClient.update_app.assert_not_awaited()
+        state = hass.states.get(entity_id)
+        assert state.attributes["installed_version"] == "0.30.0"
+        assert state.attributes["in_progress"] is False
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_install_falls_back_to_activity(hass: HomeAssistant) -> None:
+    """The service stays silent (TCL guard): open the app, then it answers."""
+    tv = dict(STATE)
+    entry, patchers = await _setup(hass, tv, AUTO)
+    adb = _fake_adb()
+    try:
+        from custom_components.pipup.api import PiPupClient
+
+        down = {"on": True}
+        PiPupClient.state.side_effect = lambda *_: (
+            (_ for _ in ()).throw(PiPupError("down")) if down["on"] else dict(tv)
+        )
+
+        async def opened():
+            down["on"] = False
+
+        adb.start_activity.side_effect = opened
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        with (
+            patch("custom_components.pipup.update.PiPupAdb", return_value=adb),
+            patch("custom_components.pipup.update.ADB_APP_BACK_TIMEOUT", 0),
+        ):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        adb.start_activity.assert_awaited_once()
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_install_failure_clears_progress(hass: HomeAssistant) -> None:
+    """A failed ADB install raises with the reason and leaves no stuck progress."""
+    entry, patchers = await _setup(hass, dict(STATE), AUTO)
+    adb = _fake_adb()
+    adb.connect.side_effect = AdbError("not_authorized")
+    try:
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        with (
+            patch("custom_components.pipup.update.PiPupAdb", return_value=adb),
+            pytest.raises(HomeAssistantError, match="did not allow debugging"),
+        ):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        assert hass.states.get(entity_id).attributes["in_progress"] is False
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def _section(**values) -> dict:
+    return {"advanced_install": {"install_method": "app", "adb_port": 5555,
+                                 "adb_key": "own", **values}}
+
+
+async def test_options_authorize_flow(hass: HomeAssistant) -> None:
+    """Changing the section tests ADB; an unknown key leads to the accept step."""
+    entry, patchers = await _setup(hass, dict(STATE))
+    test = AsyncMock(side_effect=["adb_not_authorized", "adb_not_authorized", None])
+    try:
+        with patch(
+            "custom_components.pipup.config_flow.PiPupOptionsFlow._test_adb", test
+        ):
+            result = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], _section(install_method="auto")
+            )
+            assert result["type"] == "form"
+            assert result["step_id"] == "adb_authorize"
+            # nobody pressed OK yet
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], {}
+            )
+            assert result["errors"] == {"base": "adb_not_authorized"}
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], {}
+            )
+            assert result["type"] == "create_entry"
+        assert entry.options["install_method"] == "auto"
+        assert test.await_count == 3
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_options_no_adb_test_when_unchanged(hass: HomeAssistant) -> None:
+    """Saving other options never touches ADB (a sleeping Fire TV has no network)."""
+    entry, patchers = await _setup(hass, dict(STATE))
+    test = AsyncMock(return_value="adb_cannot_connect")
+    try:
+        with patch(
+            "custom_components.pipup.config_flow.PiPupOptionsFlow._test_adb", test
+        ):
+            result = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], {"default_duration": 10, **_section()}
+            )
+            assert result["type"] == "create_entry"
+            test.assert_not_awaited()
+
+            # a change that does need ADB, and the TV is unreachable: shown, not saved
+            result = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], _section(install_method="adb")
+            )
+            assert result["type"] == "form"
+            assert result["errors"] == {"base": "adb_cannot_connect"}
+        assert entry.options["install_method"] == "app"
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+async def test_default_keeps_app_self_update(hass: HomeAssistant) -> None:
+    """Without a choice in Advanced install, Android 11 still uses the app's update."""
+    entry, patchers = await _setup(hass, dict(STATE))
+    adb = _fake_adb()
+    try:
+        from custom_components.pipup.api import PiPupClient
+
+        entity_id = next(s.entity_id for s in hass.states.async_all("update"))
+        assert hass.states.get(entity_id).attributes["install_method"] == "app"
+        with patch("custom_components.pipup.update.PiPupAdb", return_value=adb):
+            await hass.services.async_call(
+                "update", "install", {"entity_id": entity_id}, blocking=True
+            )
+        PiPupClient.update_app.assert_awaited_once()
+        adb.connect.assert_not_awaited()
+    finally:
+        for p in patchers:
+            p.stop()

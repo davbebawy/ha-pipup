@@ -70,11 +70,33 @@
           "name_suffix": "Wordt achter alle entiteitsnamen van dit apparaat gezet (bv. \"Veranda\" geeft \"Popup Veranda\") zodat meerdere TV's te onderscheiden zijn in keuzelijsten.",
           "overlay_pages": "De Pagina-keuzelijst van elke overlay biedt deze aan, plus Eigen URL. Voorbeeld: Agenda | http://192.168.1.10:8123/local/agenda.html",
           "parent_device": "De tv waarop deze PiPup-app draait; het PiPup-apparaat staat daaronder. Leeg: automatisch gevonden via de Android TV-integraties (eerst remote, dan ADB) op hetzelfde IP-adres."
+        },
+        "sections": {
+          "advanced_install": {
+            "name": "Geavanceerd installeren",
+            "description": "Hoe de PiPup-app wordt bijgewerkt. Op Android < 12 vraagt de tv bij een self-update om een bevestiging met de afstandsbediening; een ingebouwde ADB-install (zoals install.sh) niet. Vereist netwerkfoutopsporing (ADB) op de tv.",
+            "data": {
+              "install_method": "Installatiemethode",
+              "adb_port": "ADB-poort",
+              "adb_key": "ADB-sleutel"
+            },
+            "data_description": {
+              "install_method": "Self-update van de app: zoals voorheen; op Android < 12 vraagt de tv om een druk op OK. Automatisch: de eigen update van de app op Android 12+ (stil), een ADB-install op oudere versies. ADB: altijd ADB. Bij kiezen van Automatisch of ADB wordt de verbinding getest zodra je opslaat.",
+              "adb_key": "De eigen sleutel van PiPup (.storage/pipup_adbkey), of die van de Android TV-integratie, zodat een tv die die al vertrouwt geen nieuwe melding toont."
+            }
+          }
         }
+      },
+      "adb_authorize": {
+        "title": "Foutopsporing toestaan op de tv",
+        "description": "De tv ({host}) toont nu \"Foutopsporing via USB toestaan?\" of \"Allow debugging from this computer?\". Vink **Altijd toestaan vanaf deze computer** aan en kies OK, en klik dan hier op Verzenden. Staat de melding er niet meer, klik dan Verzenden: hij komt opnieuw en er wordt 30 seconden gewacht."
       }
     },
     "error": {
-      "invalid_update_source": "Gebruik github:eigenaar/repo, een http(s)-map-URL met releases.json, of off."
+      "invalid_update_source": "Gebruik github:eigenaar/repo, een http(s)-map-URL met releases.json, of off.",
+      "adb_cannot_connect": "ADB op de tv is niet bereikbaar. Zet netwerkfoutopsporing (ADB) aan in de ontwikkelaarsopties en controleer de poort.",
+      "adb_not_authorized": "De tv heeft foutopsporing vanaf Home Assistant niet toegestaan.",
+      "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel."
     }
   },
   "entity": {
@@ -315,6 +337,19 @@
         "fast_forward": "Vooruitspoelen",
         "home": "Home",
         "back": "Terug"
+      }
+    },
+    "install_method": {
+      "options": {
+        "app": "Self-update van de app (standaard)",
+        "auto": "Automatisch: app op Android 12+, ADB daaronder",
+        "adb": "ADB-install"
+      }
+    },
+    "adb_key": {
+      "options": {
+        "own": "Eigen sleutel van PiPup",
+        "androidtv": "Sleutel van de Android TV-integratie"
       }
     }
   },

@@ -70,11 +70,33 @@
           "name_suffix": "Appended to all entity names of this device (e.g. \"Veranda\" gives \"Popup Veranda\") so multiple TVs stay distinguishable in pickers.",
           "overlay_pages": "Every overlay's Page select offers these, plus Custom URL. Example: Agenda | http://192.168.1.10:8123/local/agenda.html",
           "parent_device": "The TV this PiPup app runs on; the PiPup device is shown under it. Empty: found automatically from the Android TV integrations (remote first, then ADB) on the same IP address."
+        },
+        "sections": {
+          "advanced_install": {
+            "name": "Advanced install",
+            "description": "How the PiPup app is updated. On Android < 12 the TV asks for a remote press on a self-update; a built-in ADB install (like install.sh) does not. Needs network debugging (ADB) on the TV.",
+            "data": {
+              "install_method": "Install method",
+              "adb_port": "ADB port",
+              "adb_key": "ADB key"
+            },
+            "data_description": {
+              "install_method": "App self-update: as before; on Android < 12 the TV asks for a press of OK. Auto: the app's own update on Android 12+ (silent), an ADB install on older versions. ADB: always ADB. Choosing Auto or ADB tests the connection when you save.",
+              "adb_key": "PiPup's own key (.storage/pipup_adbkey), or the Android TV integration's, so a TV that already trusts it shows no new prompt."
+            }
+          }
         }
+      },
+      "adb_authorize": {
+        "title": "Allow debugging on the TV",
+        "description": "The TV ({host}) now shows \"Allow debugging from this computer?\" (or \"Allow USB debugging?\"). Tick **Always allow from this computer**, choose OK, then click Submit here. If the prompt is gone, click Submit: it comes back and Home Assistant waits 30 seconds."
       }
     },
     "error": {
-      "invalid_update_source": "Use github:owner/repo, an http(s) folder URL with releases.json, or off."
+      "invalid_update_source": "Use github:owner/repo, an http(s) folder URL with releases.json, or off.",
+      "adb_cannot_connect": "Cannot reach ADB on the TV. Turn on network debugging (ADB) in the developer options and check the port.",
+      "adb_not_authorized": "The TV did not allow debugging from Home Assistant.",
+      "adb_no_androidtv_key": "The Android TV integration's ADB key does not exist. Choose the own key."
     }
   },
   "entity": {
@@ -315,6 +337,19 @@
         "fast_forward": "Fast forward",
         "home": "Home",
         "back": "Back"
+      }
+    },
+    "install_method": {
+      "options": {
+        "app": "App self-update (default)",
+        "auto": "Auto: app on Android 12+, ADB below",
+        "adb": "ADB install"
+      }
+    },
+    "adb_key": {
+      "options": {
+        "own": "PiPup's own key",
+        "androidtv": "Android TV integration's key"
       }
     }
   },
