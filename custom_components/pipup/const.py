@@ -10,14 +10,49 @@ DOMAIN: Final = "pipup"
 
 DEFAULT_PORT: Final = 7979
 DEFAULT_SCAN_INTERVAL: Final = timedelta(seconds=15)
+# While an app self-update runs: poll fast enough that the download percentage moves
+# (an 8 MB APK takes a few seconds to ~15 s on Wi-Fi), back to normal afterwards.
+UPDATE_POLL_INTERVAL: Final = timedelta(seconds=2)
+# with push active the poll is only a liveness heartbeat (app >= 0.24.0)
+PUSH_HEARTBEAT_INTERVAL: Final = timedelta(seconds=60)
 
 CONF_SCAN_INTERVAL: Final = "scan_interval"
-# Where app releases come from (davbebawy fork): "github:<owner>/<repo>", an http(s)
+# the TV device this PiPup device hangs under; empty = found automatically by IP
+CONF_PARENT_DEVICE: Final = "parent_device"
+# Where app releases come from: "github:<owner>/<repo>", an http(s)
 # folder URL holding releases.json + the APKs (a LAN mirror), or "off". Sent to the
-# app too (app >= 0.23.0), so the TV's own check and this entity agree.
+# app too (app >= 0.24.0), so the TV's own check and this entity agree.
 CONF_UPDATE_SOURCE: Final = "update_source"
-DEFAULT_UPDATE_SOURCE: Final = "github:davbebawy/PiPup"
+DEFAULT_UPDATE_SOURCE: Final = "github:mhoogenbosch/PiPup"
 UPDATE_SOURCE_OFF: Final = "off"
+# Advanced install (options section): how the app is updated. App (default) = the
+# app's own self-update, as before 1.29. Auto = that where it is silent (Android 12+),
+# a built-in ADB install below that. ADB = always ADB.
+CONF_ADVANCED_INSTALL: Final = "advanced_install"
+CONF_INSTALL_METHOD: Final = "install_method"
+INSTALL_METHOD_AUTO: Final = "auto"
+INSTALL_METHOD_APP: Final = "app"
+INSTALL_METHOD_ADB: Final = "adb"
+INSTALL_METHODS: Final = [INSTALL_METHOD_APP, INSTALL_METHOD_AUTO, INSTALL_METHOD_ADB]
+DEFAULT_INSTALL_METHOD: Final = INSTALL_METHOD_APP
+CONF_ADB_PORT: Final = "adb_port"
+DEFAULT_ADB_PORT: Final = 5555
+# which key signs the ADB connection: our own, or the Android TV integration's
+CONF_ADB_KEY: Final = "adb_key"
+ADB_KEY_OWN: Final = "own"
+ADB_KEY_ANDROIDTV: Final = "androidtv"
+ADB_KEYS: Final = [ADB_KEY_OWN, ADB_KEY_ANDROIDTV]
+# Automatic updates (1.30.0): a new release is installed by itself inside a quiet
+# window, one TV at a time; a failure retries the next night.
+CONF_AUTO_UPDATE: Final = "auto_update"
+CONF_QUIET_START: Final = "quiet_start"
+CONF_QUIET_END: Final = "quiet_end"
+DEFAULT_QUIET_START: Final = "03:00:00"
+DEFAULT_QUIET_END: Final = "05:00:00"
+# a repair only after this many failed nights in a row (or at once when the user
+# has to fix something on the TV)
+AUTO_UPDATE_MAX_FAILURES: Final = 3
+ISSUE_AUTO_UPDATE_FAILED: Final = "auto_update_failed"
 CONF_DEFAULT_POSITION: Final = "default_position"
 DEFAULT_POSITION: Final = "top_right"
 CONF_DEFAULT_DURATION: Final = "default_duration"
@@ -38,6 +73,7 @@ CONF_DEFAULT_SOUND: Final = "default_sound"
 CONF_DEFAULT_DISMISS_SCREENSAVER: Final = "default_dismiss_screensaver"
 CONF_DEFAULT_BUTTON_SIZE: Final = "default_button_size"
 CONF_DEFAULT_ANIMATION: Final = "default_animation"
+CONF_DEFAULT_STACK: Final = "default_stack"
 CONF_NAME_SUFFIX: Final = "name_suffix"
 # internal marker: which suffix we last applied to the entity registry names
 CONF_NAME_SUFFIX_APPLIED: Final = "name_suffix_applied"
@@ -46,6 +82,8 @@ SERVICE_SHOW: Final = "show"
 SERVICE_FIX_PERMISSION: Final = "fix_permission"
 SERVICE_DISMISS: Final = "dismiss"
 SERVICE_SYNC: Final = "sync"
+SERVICE_LAUNCH_APP: Final = "launch_app"
+SERVICE_SEND_KEY: Final = "send_key"
 
 ATTR_TITLE: Final = "title"
 ATTR_MESSAGE: Final = "message"
@@ -60,6 +98,26 @@ ATTR_BACKGROUND_COLOR: Final = "background_color"
 ATTR_IMAGE_URL: Final = "image_url"
 ATTR_VIDEO_URL: Final = "video_url"
 ATTR_WEB_URL: Final = "web_url"
+# app >= 0.25.0: WebRTC straight from a WHEP endpoint (go2rtc: /api/webrtc?src=<name>)
+ATTR_WHEP_URL: Final = "whep_url"
+# grid (app >= 0.29.0): a camera wall of WHEP streams
+ATTR_GRID: Final = "grid"
+ATTR_GRID_COLUMNS: Final = "grid_columns"
+ATTR_GRID_FULLSCREEN: Final = "grid_fullscreen"
+ATTR_GRID_LABELS: Final = "grid_labels"
+# app >= 0.29.1: the popup window covers the whole display, system bars included
+ATTR_FULLSCREEN: Final = "fullscreen"
+GRID_MAX_TILES: Final = 9
+# TV control (app >= 0.29.0)
+ATTR_PACKAGE: Final = "package"
+ATTR_URI: Final = "uri"
+ATTR_WAKE: Final = "wake"
+ATTR_KEY: Final = "key"
+KEYS: Final = [
+    "play_pause", "play", "pause", "stop", "next", "previous",
+    "rewind", "fast_forward", "home", "back",
+]
+CONTROL_MIN_APP_VERSION: Final = "0.29.0"
 ATTR_MEDIA_WIDTH: Final = "media_width"
 ATTR_MEDIA_HEIGHT: Final = "media_height"
 ATTR_MUTED: Final = "muted"
@@ -87,21 +145,35 @@ ATTR_DISMISS_SCREENSAVER: Final = "dismiss_screensaver"
 # app >= 0.19.0: compact buttons and entrance/exit animations
 # app >= 0.19.1: outer margin of the popup around its content
 ATTR_PADDING: Final = "padding"
-# davbebawy fork, app >= 0.22.0: see-through popups
+#, app >= 0.24.0: see-through popups
 ATTR_OPACITY: Final = "opacity"
 ATTR_TRANSPARENT: Final = "transparent"
-# davbebawy fork, app >= 0.24.0: several popups at once
+#, app >= 0.24.0: several popups at once
 ATTR_BRING_TO_FRONT: Final = "bring_to_front"
 ATTR_ALL: Final = "all"
 ATTR_BUTTON_SIZE: Final = "button_size"
+ATTR_BUTTON_COLOR: Final = "button_color"
+ATTR_BUTTON_FOCUS_COLOR: Final = "button_focus_color"
+ATTR_BUTTON_TEXT_COLOR: Final = "button_text_color"
+ATTR_BUTTON_BORDER_COLOR: Final = "button_border_color"
+ATTR_BUTTON_CORNER_RADIUS: Final = "button_corner_radius"
+ATTR_LIVE_BADGE: Final = "live_badge"
+ATTR_LIVE_BADGE_COLOR: Final = "live_badge_color"
+ATTR_LIVE_BADGE_POSITION: Final = "live_badge_position"
+LIVE_BADGE_POSITIONS: Final = ["top_left", "top_right", "bottom_left", "bottom_right"]
+ATTR_MEDIA_FULL_BLEED: Final = "media_full_bleed"
+ATTR_BUTTONS_INLINE: Final = "buttons_inline"
 ATTR_ANIMATION: Final = "animation"
+# app >= 0.27.0: line up with other popups at the same position (#64)
+ATTR_STACK: Final = "stack"
 
 URGENCIES: Final = ["info", "warning", "critical"]
 ICON_POSITIONS: Final = ["left", "right"]
 ANIMATIONS: Final = ["none", "fade", "slide_left", "slide_right", "slide_top", "slide_bottom"]
+STACKS: Final = ["none", "vertical", "horizontal"]
 DEFAULT_ICON_POSITION: Final = "left"
 
-# Push (davbebawy fork, app >= 0.23.0): per-entry webhook id, stored in entry data.
+# Push (app >= 0.24.0): per-entry webhook id, stored in entry data.
 # The id is the secret: the TV POSTs its /state JSON there on every change.
 CONF_PUSH_WEBHOOK_ID: Final = "push_webhook_id"
 # fired for every pushed event: event, reason, popup_id, removed_id, replaced_id, device_id
@@ -145,9 +217,25 @@ POSITIONS: Final = {
     "bottom_right": 2,
     "bottom_left": 3,
     "center": 4,
+    "top_center": 5,
+    "bottom_center": 6,
+    "center_left": 7,
+    "center_right": 8,
 }
 
-# Overlays (davbebawy fork, 1.20.0): named web popups pinned over the TV picture, one
+# Positions the app only understands from a given version on. Older apps reject an
+# unknown ordinal (the JSON parser fails the whole /notify), so pipup.show refuses to
+# send them there instead of failing silently on the TV.
+POSITION_MIN_APP_VERSION: Final = {
+    "top_center": "0.22.0",
+    "bottom_center": "0.22.0",
+    "center_left": "0.26.0",
+    "center_right": "0.26.0",
+}
+# Media types the app only understands from a given version on; an older app rejects the
+# whole /notify on an unknown media type.
+MEDIA_MIN_APP_VERSION: Final = {"whep": "0.25.0", "grid": "0.29.0"}
+# Overlays (1.20.0): named web popups pinned over the TV picture, one
 # config subentry each, with their settings as entities. Pages are a per-TV list in
 # the options, one "Name | URL" line each.
 SUBENTRY_OVERLAY: Final = "overlay"

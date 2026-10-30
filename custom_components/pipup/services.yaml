@@ -32,8 +32,18 @@ show:
             - bottom_right
             - bottom_left
             - center
+            - top_center
+            - bottom_center
+            - center_left
+            - center_right
           translation_key: position
     muted:
+      selector:
+        boolean:
+    media_full_bleed:
+      selector:
+        boolean:
+    buttons_inline:
       selector:
         boolean:
     padding:
@@ -56,12 +66,50 @@ show:
     bring_to_front:
       selector:
         boolean:
+    live_badge:
+      selector:
+        boolean:
+    live_badge_color:
+      example: "#FFA500"
+      selector:
+        text:
+    live_badge_position:
+      selector:
+        select:
+          options:
+            - top_left
+            - top_right
+            - bottom_left
+            - bottom_right
     button_size:
       selector:
         number:
           min: 4
           max: 96
           unit_of_measurement: sp
+          mode: box
+    button_color:
+      example: "#40FFFFFF"
+      selector:
+        text:
+    button_focus_color:
+      example: "#66FFFFFF"
+      selector:
+        text:
+    button_text_color:
+      example: "#FFFFFF"
+      selector:
+        text:
+    button_border_color:
+      example: "#4DFFFFFF"
+      selector:
+        text:
+    button_corner_radius:
+      selector:
+        number:
+          min: 0
+          max: 128
+          unit_of_measurement: px
           mode: box
     animation:
       selector:
@@ -74,6 +122,14 @@ show:
             - slide_top
             - slide_bottom
           translation_key: animation
+    stack:
+      selector:
+        select:
+          options:
+            - none
+            - vertical
+            - horizontal
+          translation_key: stack
     sound:
       example: "default"
       selector:
@@ -171,6 +227,31 @@ show:
     web_url:
       selector:
         text:
+    whep_url:
+      selector:
+        text:
+    grid:
+      example: >-
+        [{"whep_url": "http://go2rtc:1984/api/webrtc?src=doorbell", "label": "Doorbell"},
+        {"whep_url": "http://go2rtc:1984/api/webrtc?src=garden", "label": "Garden"}]
+      selector:
+        object:
+    grid_columns:
+      selector:
+        number:
+          min: 1
+          max: 9
+          mode: box
+    grid_fullscreen:
+      selector:
+        boolean:
+    grid_labels:
+      default: true
+      selector:
+        boolean:
+    fullscreen:
+      selector:
+        boolean:
     media_width:
       selector:
         number:
@@ -245,3 +326,45 @@ fix_permission:
             - admin
             - accessibility
           translation_key: permission
+
+launch_app:
+  target:
+    entity:
+      integration: pipup
+      domain: media_player
+  fields:
+    package:
+      example: com.netflix.ninja
+      selector:
+        text:
+    uri:
+      example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+      selector:
+        text:
+    wake:
+      default: true
+      selector:
+        boolean:
+
+send_key:
+  target:
+    entity:
+      integration: pipup
+      domain: media_player
+  fields:
+    key:
+      required: true
+      selector:
+        select:
+          translation_key: key
+          options:
+            - play_pause
+            - play
+            - pause
+            - stop
+            - next
+            - previous
+            - rewind
+            - fast_forward
+            - home
+            - back

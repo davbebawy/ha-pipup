@@ -21,14 +21,44 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
+from homeassistant.helpers.selector import (
+    DeviceFilterSelectorConfig,
+    DeviceSelector,
+    DeviceSelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TimeSelector,
+)
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util import slugify
 
+from .adb import AdbError, PiPupAdb, effective_method, requires_remote
 from .api import PiPupClient, PiPupError, PiPupUnsupportedError
+from .parent import PARENT_DOMAINS
 from .const import (
+    ADB_KEY_OWN,
+    ADB_KEYS,
+    CONF_ADB_KEY,
+    CONF_ADB_PORT,
+    CONF_ADVANCED_INSTALL,
+    CONF_AUTO_UPDATE,
+    CONF_INSTALL_METHOD,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_START,
+    INSTALL_METHOD_APP,
+    DEFAULT_ADB_PORT,
+    DEFAULT_INSTALL_METHOD,
+    INSTALL_METHOD_ADB,
+    INSTALL_METHODS,
     ANIMATIONS,
+    STACKS,
     CONF_DEFAULT_BACKGROUND_COLOR,
     CONF_DEFAULT_BORDER_COLOR,
     CONF_DEFAULT_BORDER_WIDTH,
@@ -41,6 +71,7 @@ from .const import (
     CONF_DEFAULT_MESSAGE_COLOR,
     CONF_DEFAULT_MESSAGE_SIZE,
     CONF_DEFAULT_ANIMATION,
+    CONF_DEFAULT_STACK,
     CONF_DEFAULT_BUTTON_SIZE,
     CONF_DEFAULT_DISMISS_SCREENSAVER,
     CONF_DEFAULT_MUTED,
@@ -51,6 +82,7 @@ from .const import (
     CONF_NAME_SUFFIX,
     CONF_OVERLAY_PAGES,
     CONF_OVERLAY_POPUP_ID,
+    CONF_PARENT_DEVICE,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
     DEFAULT_ICON_POSITION,
@@ -293,6 +325,19 @@ class OverlaySubentryFlow(ConfigSubentryFlow):
         )
 
 
+# Saving the Advanced install section tests the ADB connection. The first attempt
+# only needs to get the "Allow debugging?" prompt onto the TV; the retry after the
+# user was told to accept it waits long enough to press OK with the remote.
+ADB_TEST_AUTH_TIMEOUT = 2.0
+ADB_AUTHORIZE_AUTH_TIMEOUT = 30.0
+# the fields whose change re-tests ADB (the quiet window does not need that)
+_ADVANCED_INSTALL_DEFAULTS = {
+    CONF_INSTALL_METHOD: DEFAULT_INSTALL_METHOD,
+    CONF_ADB_PORT: DEFAULT_ADB_PORT,
+    CONF_ADB_KEY: ADB_KEY_OWN,
+    CONF_AUTO_UPDATE: False,
+}
+
 _UPDATE_SOURCE_RE = re.compile(
     r"^(off|github:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|https?://\S+)$"
 )
@@ -301,11 +346,61 @@ _UPDATE_SOURCE_RE = re.compile(
 class PiPupOptionsFlow(OptionsFlow):
     """Options flow: polling, entity names and per-device popup defaults."""
 
+    # options waiting for the ADB prompt to be accepted on the TV
+    _pending: dict[str, Any]
+
+    def _device_data(self) -> dict[str, Any]:
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        return (coordinator.data if coordinator else None) or {}
+
+    def _needs_adb(self, options: dict[str, Any]) -> bool:
+        """Whether these options make the Install button use ADB on this TV."""
+        return effective_method(options, self._device_data()) == INSTALL_METHOD_ADB
+
+    def _auto_update_needs_adb(self, options: dict[str, Any]) -> bool:
+        """Automatic updates with the app's own update on a TV that needs the remote."""
+        data = self._device_data()
+        return (
+            bool(options.get(CONF_AUTO_UPDATE))
+            and effective_method(options, data) == INSTALL_METHOD_APP
+            and requires_remote(data)
+        )
+
+    async def _test_adb(self, options: dict[str, Any], auth_timeout: float) -> str | None:
+        """Connect once; None when it works, else the error key."""
+        try:
+            async with PiPupAdb(
+                self.hass, self.config_entry.data[CONF_HOST], options
+            ) as adb:
+                await adb.connect(auth_timeout)
+        except AdbError as err:
+            return f"adb_{err.reason}"
+        return None
+
+    async def async_step_adb_authorize(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for "Allow debugging from this computer?" to be accepted on the TV."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            error = await self._test_adb(self._pending, ADB_AUTHORIZE_AUTH_TIMEOUT)
+            if error is None:
+                return self.async_create_entry(title="", data=self._pending)
+            errors["base"] = error
+        return self.async_show_form(
+            step_id="adb_authorize",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"host": self.config_entry.data[CONF_HOST]},
+        )
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
         errors: dict[str, str] = {}
+        # after an ADB error: show what was entered, not what is stored
+        entered: dict[str, Any] | None = None
         if user_input is not None and not _UPDATE_SOURCE_RE.match(
             (user_input.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE).strip()
         ):
@@ -320,6 +415,10 @@ class PiPupOptionsFlow(OptionsFlow):
             options[CONF_UPDATE_SOURCE] = (
                 user_input.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE
             ).strip()
+            if parent := user_input.get(CONF_PARENT_DEVICE):
+                options[CONF_PARENT_DEVICE] = parent
+            else:
+                options.pop(CONF_PARENT_DEVICE, None)  # empty: find it automatically
             options[CONF_NAME_SUFFIX] = (
                 user_input.get(CONF_NAME_SUFFIX) or ""
             ).strip()
@@ -339,6 +438,7 @@ class PiPupOptionsFlow(OptionsFlow):
             # 0 = no default (classic look)
             options[CONF_DEFAULT_BUTTON_SIZE] = user_input.get(CONF_DEFAULT_BUTTON_SIZE, 0)
             options[CONF_DEFAULT_ANIMATION] = user_input.get(CONF_DEFAULT_ANIMATION, "none")
+            options[CONF_DEFAULT_STACK] = user_input.get(CONF_DEFAULT_STACK, "none")
             sound = (user_input.get(CONF_DEFAULT_SOUND) or "").strip()
             if sound:
                 options[CONF_DEFAULT_SOUND] = sound
@@ -383,9 +483,36 @@ class PiPupOptionsFlow(OptionsFlow):
                     options.pop(key, None)
                 else:
                     options[key] = value
-            return self.async_create_entry(title="", data=options)
+            advanced = user_input.get(CONF_ADVANCED_INSTALL) or {}
+            options[CONF_INSTALL_METHOD] = advanced.get(
+                CONF_INSTALL_METHOD, DEFAULT_INSTALL_METHOD
+            )
+            options[CONF_ADB_PORT] = int(advanced.get(CONF_ADB_PORT, DEFAULT_ADB_PORT))
+            options[CONF_ADB_KEY] = advanced.get(CONF_ADB_KEY, ADB_KEY_OWN)
+            options[CONF_AUTO_UPDATE] = bool(advanced.get(CONF_AUTO_UPDATE, False))
+            options[CONF_QUIET_START] = advanced.get(CONF_QUIET_START, DEFAULT_QUIET_START)
+            options[CONF_QUIET_END] = advanced.get(CONF_QUIET_END, DEFAULT_QUIET_END)
+            # Test ADB only when the section changed: a sleeping Fire TV has no
+            # network at all, and that must not block saving a popup default.
+            changed = any(
+                options[key] != self.config_entry.options.get(key, default)
+                for key, default in _ADVANCED_INSTALL_DEFAULTS.items()
+            )
+            if self._auto_update_needs_adb(options):
+                # the update would wait for a press on the remote, at night
+                errors["base"] = "auto_update_needs_adb"
+            elif changed and self._needs_adb(options):
+                error = await self._test_adb(options, ADB_TEST_AUTH_TIMEOUT)
+                if error == "adb_not_authorized":
+                    self._pending = options
+                    return await self.async_step_adb_authorize()
+                if error is not None:
+                    errors["base"] = error
+            if not errors:
+                return self.async_create_entry(title="", data=options)
+            entered = options
 
-        opts = self.config_entry.options
+        opts = entered or self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -404,6 +531,19 @@ class PiPupOptionsFlow(OptionsFlow):
                             "suggested_value": opts.get(CONF_NAME_SUFFIX, "")
                         },
                     ): str,
+                    vol.Optional(
+                        CONF_PARENT_DEVICE,
+                        description={
+                            "suggested_value": opts.get(CONF_PARENT_DEVICE)
+                        },
+                    ): DeviceSelector(
+                        DeviceSelectorConfig(
+                            filter=[
+                                DeviceFilterSelectorConfig(integration=domain)
+                                for domain in PARENT_DOMAINS
+                            ]
+                        )
+                    ),
                     vol.Optional(
                         CONF_OVERLAY_PAGES,
                         description={
@@ -438,6 +578,10 @@ class PiPupOptionsFlow(OptionsFlow):
                         CONF_DEFAULT_ANIMATION,
                         default=opts.get(CONF_DEFAULT_ANIMATION, "none"),
                     ): vol.In(ANIMATIONS),
+                    vol.Optional(
+                        CONF_DEFAULT_STACK,
+                        default=opts.get(CONF_DEFAULT_STACK, "none"),
+                    ): vol.In(STACKS),
                     vol.Optional(
                         CONF_DEFAULT_MEDIA_WIDTH,
                         default=opts.get(CONF_DEFAULT_MEDIA_WIDTH, 640),
@@ -506,6 +650,51 @@ class PiPupOptionsFlow(OptionsFlow):
                             "suggested_value": opts.get(CONF_DEFAULT_CORNER_RADIUS)
                         },
                     ): vol.All(vol.Coerce(float), vol.Range(min=0, max=128)),
+                    vol.Optional(CONF_ADVANCED_INSTALL): section(
+                        vol.Schema(
+                            {
+                                vol.Required(
+                                    CONF_INSTALL_METHOD,
+                                    default=opts.get(
+                                        CONF_INSTALL_METHOD, DEFAULT_INSTALL_METHOD
+                                    ),
+                                ): SelectSelector(
+                                    SelectSelectorConfig(
+                                        options=INSTALL_METHODS,
+                                        translation_key=CONF_INSTALL_METHOD,
+                                        mode=SelectSelectorMode.DROPDOWN,
+                                    )
+                                ),
+                                vol.Required(
+                                    CONF_ADB_PORT,
+                                    default=opts.get(CONF_ADB_PORT, DEFAULT_ADB_PORT),
+                                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+                                vol.Required(
+                                    CONF_ADB_KEY,
+                                    default=opts.get(CONF_ADB_KEY, ADB_KEY_OWN),
+                                ): SelectSelector(
+                                    SelectSelectorConfig(
+                                        options=ADB_KEYS,
+                                        translation_key=CONF_ADB_KEY,
+                                        mode=SelectSelectorMode.DROPDOWN,
+                                    )
+                                ),
+                                vol.Required(
+                                    CONF_AUTO_UPDATE,
+                                    default=opts.get(CONF_AUTO_UPDATE, False),
+                                ): bool,
+                                vol.Required(
+                                    CONF_QUIET_START,
+                                    default=opts.get(CONF_QUIET_START, DEFAULT_QUIET_START),
+                                ): TimeSelector(),
+                                vol.Required(
+                                    CONF_QUIET_END,
+                                    default=opts.get(CONF_QUIET_END, DEFAULT_QUIET_END),
+                                ): TimeSelector(),
+                            }
+                        ),
+                        {"collapsed": True},
+                    ),
                 }
             ),
             errors=errors,

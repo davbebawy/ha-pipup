@@ -5,35 +5,44 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
 )
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
+from .api import PiPupClient, PiPupError
 from .const import (  # noqa: F401
     CONF_NAME_SUFFIX,
     CONF_NAME_SUFFIX_APPLIED,
     CONF_OVERLAY_PAGES,
+    CONF_OVERLAY_POPUP_ID,
+    CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UPDATE_SOURCE,
     DOMAIN,
 )
-from .coordinator import PiPupCoordinator
-from .overlay import OverlayManager, overlay_subentries
+from .coordinator import PiPupCoordinator, popup_ids
+from .overlay import OverlayManager, overlay_store, overlay_subentries
+from .parent import async_link_parent, async_track_parent
 from .services import async_setup_services
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.MEDIA_PLAYER,
     Platform.NOTIFY,
     Platform.NUMBER,
     Platform.SELECT,
@@ -66,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PiPupConfigEntry) -> boo
     _async_migrate_unique_id(hass, entry, coordinator.data.get("id"))
 
     entry.runtime_data = coordinator
-    # app >= 0.23.0 (davbebawy fork): push instead of the timed poll
+    # app >= 0.24.0: push instead of the timed poll
     await coordinator.async_setup_push()
     entry.async_on_unload(coordinator.async_teardown_push)
     await coordinator.async_apply_app_settings()
@@ -81,6 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PiPupConfigEntry) -> boo
 
     _async_apply_name_suffix(hass, entry)
     _async_track_sw_version(hass, entry, coordinator)
+    async_track_parent(hass, entry)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
@@ -100,6 +110,7 @@ def _async_track_sw_version(
     the wrong TV (see the mDNS hostname collision in config_flow), the registry kept
     that TV's hardware on the device page long after the address was corrected.
     """
+    identifier = (DOMAIN, entry.unique_id or entry.entry_id)
     last_seen: dict[str, str | None] = {}
 
     @callback
@@ -115,9 +126,7 @@ def _async_track_sw_version(
         if not wanted or wanted == last_seen:
             return
         registry = dr.async_get(hass)
-        device = registry.async_get_device_by_identifier(
-            (DOMAIN, entry.unique_id or entry.entry_id), entry.entry_id
-        )
+        device = _async_get_own_device(registry, identifier, entry.entry_id)
         if device is not None:
             changed = {
                 k: v for k, v in wanted.items() if getattr(device, k, None) != v
@@ -128,6 +137,21 @@ def _async_track_sw_version(
 
     _sync()
     entry.async_on_unload(coordinator.async_add_listener(_sync))
+
+
+@callback
+def _async_get_own_device(
+    registry: dr.DeviceRegistry, identifier: tuple[str, str], entry_id: str
+) -> dr.DeviceEntry | None:
+    """Return this entry's device for the identifier.
+
+    HA 2026.10 deprecated ``async_get_device`` (identifiers are no longer unique
+    across config entries; it stops working in 2027.8). Its successor is scoped to
+    the owning config entry. Older HA versions only have ``async_get_device``.
+    """
+    if hasattr(registry, "async_get_device_by_identifier"):
+        return registry.async_get_device_by_identifier(identifier, entry_id)
+    return registry.async_get_device(identifiers={identifier})
 
 
 def _async_migrate_unique_id(
@@ -155,7 +179,7 @@ def _async_migrate_unique_id(
             )
 
     dev_reg = dr.async_get(hass)
-    if device := dev_reg.async_get_device_by_identifier((DOMAIN, old), entry.entry_id):
+    if device := _async_get_own_device(dev_reg, (DOMAIN, old), entry.entry_id):
         dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, device_id)})
 
     hass.config_entries.async_update_entry(entry, unique_id=device_id)
@@ -199,11 +223,20 @@ async def _async_update_listener(hass: HomeAssistant, entry: PiPupConfigEntry) -
     call time and don't need a reload.
     """
     _async_apply_name_suffix(hass, entry)
+    async_link_parent(hass, entry)
 
     coordinator = entry.runtime_data
     # an overlay added or removed: its entities are built at setup
-    if {sub.subentry_id for sub in overlay_subentries(entry)} != coordinator.overlays.subentry_ids:
+    current = {sub.subentry_id for sub in overlay_subentries(entry)}
+    if current != coordinator.overlays.subentry_ids:
+        removed = [
+            coordinator.overlays.popup_ids[sub_id]
+            for sub_id in coordinator.overlays.subentry_ids - current
+            if sub_id in coordinator.overlays.popup_ids
+        ]
         hass.config_entries.async_schedule_reload(entry.entry_id)
+        # a removed overlay's popup would otherwise stay on the TV
+        await _async_cancel_overlay_popups(coordinator.client, removed, coordinator.data)
         return
     pages = entry.options.get(CONF_OVERLAY_PAGES)
     if pages != coordinator.applied_pages:
@@ -231,3 +264,63 @@ async def _async_update_listener(hass: HomeAssistant, entry: PiPupConfigEntry) -
 async def async_unload_entry(hass: HomeAssistant, entry: PiPupConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def _async_cancel_overlay_popups(
+    client: PiPupClient, ids: list[str], state: dict | None
+) -> None:
+    """Best effort: take these overlay popups off the TV, if they are on it."""
+    on_screen = set(popup_ids(state))
+    for popup_id in ids:
+        if popup_id not in on_screen:
+            continue
+        try:
+            await client.cancel(popup_id)
+        except PiPupError as err:
+            _LOGGER.debug("PiPup: could not take overlay popup %s off the TV: %s", popup_id, err)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: PiPupConfigEntry) -> None:
+    """Clean up after a deleted entry: the TV's webhook, overlay popups, overlay store.
+
+    Everything here is best effort; a TV that is off just keeps its state until the
+    integration is set up again (the webhook then 404s and the app ignores it).
+    """
+    try:
+        await overlay_store(hass, entry.entry_id).async_remove()
+    except Exception:  # noqa: BLE001 - removal must never fail
+        _LOGGER.debug("PiPup: could not remove the overlay store", exc_info=True)
+
+    host, port = entry.data.get(CONF_HOST), entry.data.get(CONF_PORT)
+    if not host or not port:
+        return
+    client = PiPupClient(async_get_clientsession(hass), host, port)
+    try:
+        state = await client.state()
+    except PiPupError as err:
+        _LOGGER.debug("PiPup at %s unreachable on removal: %s", host, err)
+        return
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("PiPup: reading the state on removal failed", exc_info=True)
+        return
+
+    if entry.data.get(CONF_PUSH_WEBHOOK_ID):
+        try:
+            await client.settings(webhook="")
+        except PiPupError as err:  # includes PiPupUnsupportedError
+            _LOGGER.debug("PiPup at %s: could not clear the push webhook: %s", host, err)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("PiPup: clearing the push webhook failed", exc_info=True)
+
+    try:
+        await _async_cancel_overlay_popups(
+            client,
+            [
+                sub.data[CONF_OVERLAY_POPUP_ID]
+                for sub in overlay_subentries(entry)
+                if sub.data.get(CONF_OVERLAY_POPUP_ID)
+            ],
+            state,
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("PiPup: taking the overlays off the TV failed", exc_info=True)

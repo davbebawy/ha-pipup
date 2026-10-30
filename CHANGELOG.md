@@ -7,51 +7,232 @@ Every version below has a [GitHub release](https://github.com/mhoogenbosch/ha-pi
 full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matching version of the
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
-## [1.21.0] - 2026-09-27 (davbebawy fork: several popups at once)
-### Added
-- Several popups at once *(app >= 0.24.0)*: an overlay's **Show** switch reads the app's `popups`
-  list, so another popup opens beside the overlay and leaves it on.
-- Sensor **Popups on screen** (count). **Current popup** keeps the id of the top popup and gains a
-  `popups` attribute (every id, in stack order); the popup binary sensor gains the same attribute.
-- `pipup.show` field `bring_to_front`; overlay switch **Redraw on top**: a redraw opens on top of the
-  other popups instead of in its old place.
-- `pipup.dismiss` field `all`. `pipup_event` gains `shown_id` and `popup_ids`.
-### Changed
-- `pipup.dismiss` without `popup_id` removes the popup shown without an id (app >= 0.24.0); the
-  **Dismiss popup** button removes every popup.
+## [Unreleased]
 
-## [1.20.0] - 2026-09-27 (davbebawy fork: overlays)
-### Added
-- **Overlays:** named web pages pinned over the TV picture. Add one with **Add overlay** on the
-  integration page (a config subentry of the TV). Each gets its own device `<name> overlay` with a
-  **Show** switch (on while its popup is on the TV, read from the pushed state), settings as entities
-  (Page, Layout, Position, Animation, Sound, Width, Height, Duration, Padding, Corner radius, Border
-  width, Page opacity, Background opacity, Muted, Transparent, Custom URL, Title, Border color,
-  Background color) and a **Status** sensor that says why the popup left (replaced, time up, closed,
-  hidden). A setting change while the overlay is up redraws it after 1 s. Duration is the app's own
-  popup duration, so expiry arrives as a push. Settings are kept in `.storage/pipup.overlays.<entry_id>`.
-- Option **Overlay pages**: one `Name | URL` line per page; every overlay's Page select offers them
-  plus Custom URL.
-### Changed
-- Device lookups use `async_get_device_by_identifier` (the old call stops working in HA 2027.8).
-- Needs Home Assistant 2026.9 or newer.
-
-## [1.19.1] - 2026-09-27
+## [v1.30.1] — 2026-10-25 (ADB install on slow TVs)
 ### Fixed
-- Options form failed to open (500): the update source check was a `vol.Match` in the schema, which the UI cannot serialize. It is now checked in the step, with an error on the field.
+- **ADB install broke off after 10 s** on TVs where `pm install` takes longer (a TCL: 12.7 s). adb-shell
+  caps its wait for the next bytes at the read timeout, so the 2-minute wait passed in 1.29/1.30 was cut
+  to 10 s. HA then reported "the ADB connection dropped" while the TV finished the install on its own;
+  the permissions were not re-granted. Both timeouts are now 2 minutes, and a TV that closes the
+  connection is reported at once instead of keeping Home Assistant busy until the timeout.
 
-## [1.19.0] - 2026-09-27 (davbebawy fork: push instead of poll)
+## [v1.30.0] — 2026-10-25 (automatic updates)
 ### Added
-- Push (app >= 0.23.0, davbebawy/PiPup): setup registers a local-only webhook per TV and sends its
-  URL to the app (`/settings?webhook=`). The app POSTs its state on every change, so the coordinator
-  stops polling (`update_interval=None`). `/state` is read only at setup, after this integration's own
-  calls, and on Sync. Each push also fires a `pipup_event` event (event, reason, popup_id,
-  removed_id, replaced_id, device_id). An app without push keeps the timed poll.
+- **Automatic updates** in *Advanced install* (#49): a new app release is installed by itself inside a
+  quiet window (default 03:00–05:00), one TV at a time, once a night, never while a popup is on screen,
+  and on a TV that is on the app is never opened. App self-update where it is silent (Android 12+),
+  ADB below; a skipped version is left alone. Success = a logbook entry; a failure retries the next
+  night, with a repair after three failed nights or at once for something to fix on the TV. Attributes
+  `auto_update`, `last_auto_update`, `auto_update_failures` on the update entity, restored after a restart.
+
+## [v1.29.0] — 2026-10-25 (Advanced install: built-in ADB install)
+### Added
+- **Advanced install** in the options (gear icon), a collapsed section per TV: install method (*App
+  self-update*, the default and the old behaviour; *Auto*: app on Android 12+, ADB below; *ADB*), ADB port
+  and ADB key (PiPup's own `pipup_adbkey`, or the Android TV integration's key). Choosing Auto or ADB tests
+  the connection on save and walks you through *Allow debugging from this computer?* on the TV.
+- **Install over ADB** on the update entity, without a remote press on Android < 12 (PiPup #76, #49):
+  the same steps as `install.sh` in pure Python (`adb-shell`, the library core's Android TV integration
+  uses), so it works on Home Assistant OS. APK checked against the release's sha256 and not kept
+  in memory afterwards; app-ops re-granted; never uninstalls. Attribute `install_method` on the update
+  entity; `requires_remote` is false with ADB.
+### Dependencies
+- `adb-shell[async]>=0.4.4`: Home Assistant core already ships it for `androidtv`, so it follows core's version.
+
+## [v1.28.1] — 2026-10-24 (full-screen popups)
+### Added
+- **`fullscreen`** in `pipup.show` *(app ≥ 0.29.1)*: the popup window covers the whole screen, system
+  bars included (PiPup #73). `grid_fullscreen` sets it too, so a camera wall is no longer clipped on a
+  device with system bars. No version gate: an older app ignores the field.
+### Docs
+- Three examples with the new TV control and camera wall: doorbell (pause + camera wall), a dashboard button
+  (app + volume) and bedtime (pause + info card).
+
+## [v1.28.0] — 2026-10-23 (TV control, camera wall, blueprints)
+### Added
+- **Media player per TV** *(app ≥ 0.29.0)*: the installed apps as sources (select = start), media keys
+  for play/pause/stop/next/previous, volume up/down/mute, a volume slider where the volume is not fixed
+  (HDMI-CEC), on/off through the screen routes. Created only when the app reports TV control.
+- **`pipup.launch_app`** (package and/or deep link, `wake`) and **`pipup.send_key`** (media keys,
+  home, back) *(app ≥ 0.29.0)*; a TV on an older app gets an error naming the version it needs.
+- **`grid`** in `pipup.show` *(app ≥ 0.29.0)*: a camera wall of up to nine WHEP streams, with
+  `grid_columns`, `grid_fullscreen` (centred, no padding unless given) and `grid_labels`.
+- **Blueprints**: *Info card on the TV* (script) and *Appliance done* (automation, with a running
+  helper and a 5-minute safety net). Both tested in Home Assistant in the test suite.
+- English and Dutch labels for every new field.
+
+## [v1.27.0] — 2026-10-14 (camera popup look, button style, video height)
+All contributed by @pelkiegr (ha-pipup #42, #43, #44; app side PiPup #69-#71). *(app ≥ 0.28.0)*; every field
+is sent only when set and an older app ignores it.
+### Added
+- **`live_badge`**, `live_badge_color`, `live_badge_position`, **`media_full_bleed`** and **`buttons_inline`**
+  in `pipup.show` (#44): the camera popup look.
+- **`button_color`**, `button_focus_color`, `button_text_color`, `button_border_color`,
+  `button_corner_radius` (#43): button style.
+- **`media_height` now also applies to video popups** (`camera_entity` stream/mjpeg and `video_url`) as
+  `media.video.height` (#42). Only a per-call value is sent: the per-TV default (360 on existing setups)
+  would otherwise change every video popup's poster sizing.
+
+## [v1.26.0] — 2026-10-14 (popup stacking)
+### Added
+- **`stack: vertical | horizontal | none`** in `pipup.show` *(app ≥ 0.27.0)*: line a popup up with
+  the other stacking popups at the same position instead of overlapping them (PiPup #64, requested by
+  @bboykaos). There is a per-TV default under *Configure* (*Default stacking*), and `none` overrides it
+  for one call. No version gate: an older app ignores the field. English and Dutch labels.
+### Docs
+- "Which camera route?": a TV where the poster shows but WHEP video never comes may have a small UDP
+  receive buffer (256 KB on a Nokia 8010); keep the camera's keyframes under ~220 KB or use the
+  sub-stream for that TV. Links to the measurement recipe in the app README.
+
+## [v1.25.0] — 2026-10-11 (center left / center right)
+### Added
+- **`position: center_left` and `center_right`** *(app ≥ 0.26.0)* — the 3×3 grid is complete
+  (PiPup #62, requested by @bboykaos). Available in `pipup.show`, the default-position option and the
+  overlay entities; English and Dutch labels. Gated like `top_center`/`bottom_center`: on an older app
+  the action reports an error for that TV instead of sending an ordinal the app would reject.
+### Docs
+- **Upgrade note for `pipup.dismiss` without `popup_id`** (README). Since 1.22.0 / app 0.24.0 it removes
+  only a popup shown without an id; popups shown with `popup_id` stay up, silently. Automations written
+  for ≤ 1.21 that dismiss without an id must now pass the `popup_id` (or `all: true`). The v1.22.0
+  entry below now says so too. The camera example uses `condition: trigger` instead of a template.
+
+## [v1.24.1] — 2026-10-08 (audit fixes)
+### Fixed
+- **Button presses are bound to their popup.** The single-use token was checked, but the
+  `pipup_button` event then took `popup_id`, `button`, `label`, `device_id` and `device_name` from the
+  callback body, so whoever held a token could fire any button for any popup or TV. The token now
+  records the popup id, its buttons and the TV; a press only counts for a button that was on that
+  popup, and the event carries those issued values. Event keys and their meaning are unchanged.
+- Diagnostics no longer contain the push webhook id (`push_webhook_id` is redacted).
+- Removing an overlay now takes its popup off the TV when it is up; before, it stayed on screen.
+- Deleting a PiPup entry now clears the TV's push webhook, takes its overlays off the TV (when the TV
+  answers) and removes `.storage/pipup.overlays.<entry_id>`. Best effort: it never blocks the removal.
+- A push arriving between removing an overlay and the entry's reload no longer raises `KeyError`.
+- After an app install with the release source unreachable (no latest tag), the update entity kept
+  showing "installing" and the TV was polled every 2 s for 15 minutes. Any version change after
+  Install now ends the progress.
+- The app-version gate counts a build like `0.25.0-rc1` or `0.25.0-debug` as 0.25.0, and an
+  unparseable installed version (`unknown`) no longer raises in the update entity.
+### Changed
+- `pipup.show` and `pipup.dismiss` call all targeted TVs at once instead of one after another, so an
+  unreachable TV no longer delays the others. Errors are reported as before (one message, per TV).
+  A TV with push no longer gets the extra 0.5 s wait plus `/state` read after the call: the app
+  pushes the change itself. Polled TVs keep it.
+- The release check runs once per source at a time (several TVs starting together make one request)
+  and a failed check is remembered for 15 minutes instead of being retried on every poll.
+- A webhook that cannot be set (no internal URL, app refusing it) is logged as a warning once, then
+  at debug level until the problem changes or is solved, instead of on every heartbeat.
+
+## [v1.24.0] — 2026-10-07 (PiPup device under its TV)
+Idea from [PR #31](https://github.com/mhoogenbosch/ha-pipup/pull/31) by [@aarya123](https://github.com/aarya123).
+### Added
+- The PiPup device now hangs under the TV it runs on (device page: "Connected via <TV>"). The TV is
+  found among the devices of the **Android TV Remote** and **Android Debug Bridge** integrations on
+  the same IP address, remote first, then the oldest device. Other integrations on that address
+  (notifications, AirPlay, network trackers) are ignored: their devices are not the TV.
+- Option **Parent device (TV)**: pick the TV yourself; empty = automatic.
+- Linking runs at setup, when a device is added to the registry (a TV integration set up later) and
+  when the options change — not on every poll or push.
+
+## [v1.23.1] — 2026-10-07 (push after an app self-update)
+### Fixed
+- A TV whose entry loaded while it still ran an app without push (< 0.24.0) kept polling after the
+  app updated itself; push only started at the next reload or a Sync. The coordinator now sets up
+  push at the first poll that reports support.
+
+## [v1.23.0] — 2026-10-07 (whep_url)
+Companion to [app v0.25.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.25.0).
+### Added
+- **`whep_url`** on `pipup.show` *(app ≥ 0.25.0)*: a WebRTC stream played straight from a WHEP
+  endpoint (go2rtc `/api/webrtc?src=<camera>`), without go2rtc's player page. Fire TV measurement:
+  first frame after 2.3 s on average against 3.4 s for the page. `muted` defaults to true;
+  `poster_url` and `transparent` apply. A TV with an older app gets an error from the action
+  ("whep_url needs PiPup app 0.25.0 or newer") instead of a popup that fails on the TV.
+
+## [v1.22.0] — 2026-10-07 (push, overlays, several popups at once, see-through popups)
+Companion to [app v0.24.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.24.0). Built by
+[David Bebawy (@davbebawy)](https://github.com/davbebawy) in his fork and adopted here with his
+commits and authorship intact. Needs Home Assistant 2026.9 or newer (overlays are config subentries).
+### Added
+- **Push instead of poll** *(app ≥ 0.24.0)*: setup registers a local-only webhook per TV and sends its
+  URL to the app. The app POSTs its state on every change, so popup, screen and overlay entities follow
+  at once. Each push fires a **`pipup_event`** event (`event`, `reason`, `popup_id`, `shown_id`,
+  `popup_ids`, `removed_id`, `replaced_id`, `device_id`, `pipup_id`, `device_name`). The integration
+  sends the webhook again when the app reports it has none (after a reinstall). An app without push
+  keeps the timed poll.
+- **Breaking for `pipup.dismiss` without `popup_id`** *(note added 2026-10-10)*: with app ≥ 0.24.0 it
+  removes only a popup shown without an id; a popup shown with `popup_id` stays on screen and no error
+  is raised. Pass the `popup_id` (or `all: true`) in the dismiss.
 - **Sync** button and `pipup.sync` action: read the TV's state now and re-send the webhook.
-- `pipup.show`: `opacity` (0..1) and `transparent` (web_url pages with a transparent body show the TV).
-- Option **App update source**: `github:owner/repo` (default `github:davbebawy/PiPup`), a folder URL
-  with `releases.json` (LAN mirror), or `off`. Sent to the app as well, so the TV's own check uses the
-  same source; `off` also drops the update entity.
+- **Overlays:** named web pages pinned over the TV picture. **Add overlay** on the integration page
+  (a config subentry of the TV) gives a device `<name> overlay` with a **Show** switch (follows the
+  pushed state), its settings as entities (Page, Layout, Position, Animation, Sound, Width, Height,
+  Duration, Padding, Corner radius, Border width, Page opacity, Background opacity, Muted,
+  Transparent, Custom URL, Title, Border color, Background color, Redraw on top) and a **Status**
+  sensor that says why the popup left. A setting change while the overlay is up redraws it after 1 s.
+  Settings are kept in `.storage/pipup.overlays.<entry_id>`. Option **Overlay pages** holds the page
+  list, one `Name | URL` line each.
+- **Several popups at once** *(app ≥ 0.24.0)*: sensor **Popups on screen**; **Current popup** keeps
+  the top popup and gains a `popups` attribute (every id, in stack order), as does the popup binary
+  sensor. `pipup.show` field `bring_to_front`; `pipup.dismiss` field `all`.
+- `pipup.show`: `opacity` (0..1) and `transparent` (`web_url` pages with a transparent body show the
+  TV) *(app ≥ 0.24.0)*.
+- Option **App update source**: `github:owner/repo` (default `github:mhoogenbosch/PiPup`), a folder
+  URL with `releases.json` (LAN mirror), or `off`. Sent to the app too; `off` also drops the update
+  entity.
+- Dutch translations for everything above; overlay positions include top/bottom center.
+### Changed
+- `pipup.dismiss` without `popup_id` removes the popup shown without an id *(app ≥ 0.24.0)*; the
+  **Dismiss popup** button removes every popup.
+- With push active the poll becomes a **60 s heartbeat** (was 15 s): a TV that sleeps or leaves the
+  network still turns unavailable, since it cannot push that itself. (davbebawy's version stopped
+  polling entirely.)
+
+## [v1.21.0] — 2026-10-03 (app version sensor)
+### Added
+- **App version** diagnostic sensor per TV: the PiPup app version running on the TV, usable in templates,
+  conditions and dashboards.
+### Fixed
+- The device's software version now follows the app on the TV. It was only set when the entities were
+  created, so after a self-update the device page kept showing the old version until the next reload.
+- The download percentage from 1.20.0 is now hidden while the TV is unreachable during the app restart that
+  finishes an install. 1.20.0 checked the coordinator's `last_update_success`, which stays true because the
+  coordinator returns its previous data when the TV does not answer, so the bar could freeze at its last value.
+
+## [v1.20.0] — 2026-10-03 (update progress)
+Companion to [app v0.23.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.23.0).
+### Added
+- The app update entity shows a **download percentage** while the TV downloads the new version
+  *(app ≥ 0.23.0)*, then an indeterminate *installing* state until the new version runs. While an update
+  runs the integration polls the TV every 2 seconds instead of every 15, so the percentage actually moves;
+  it returns to the normal interval when the update has landed.
+### Fixed
+- The update entity now keeps showing *installing* until the new version actually runs on the TV (any app
+  version). It declared Install but not Progress, and Home Assistant only reads an entity's own progress
+  when it declares Progress; otherwise it uses its own flag, which is cleared as soon as the TV has
+  accepted the request. The Install button therefore came back after a few seconds while the TV was still
+  downloading, and pressing it again failed with "an update is already running".
+- Starting an install while one is already running (from an action or automation) now raises a clear
+  error instead of sending a second request to the TV.
+
+## [v1.19.0] — 2026-09-30 (top and bottom center positions)
+Companion to [app v0.22.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.22.0).
+### Added
+- **`top_center`** and **`bottom_center`** positions on `pipup.show` and in the per-TV default-position
+  select: centered along the top or bottom edge *(app ≥ 0.22.0)*. Contributed by
+  [@andrewm1205](https://github.com/andrewm1205) in #25.
+### Changed
+- `pipup.show` checks the app version per TV before sending one of these positions: an older app rejects an
+  unknown position (the popup would never appear), so the action now reports an error for that TV and still
+  shows the popup on the others.
+
+## [v1.18.1] — 2026-09-30 (device registry lookup for HA 2026.10)
+### Fixed
+- Home Assistant 2026.10 deprecates `device_registry.async_get_device` (device identifiers are no longer
+  unique across config entries; the call stops working in 2027.8) and logs a warning at every start. The
+  integration now looks up its own device with `async_get_device_by_identifier`, scoped to its config
+  entry, and falls back to the old call on Home Assistant versions that do not have it yet.
 
 ## [v1.18.0] — 2026-08-31 (announce version to the app)
 Companion to [app v0.21.0](https://github.com/mhoogenbosch/PiPup/releases/tag/v0.21.0).

@@ -50,6 +50,7 @@
           "default_dismiss_screensaver": "Screensaver beëindigen vóór een popup (standaard)",
           "default_button_size": "Standaard knop-tekstgrootte (sp; 0 = klassieke look)",
           "default_animation": "Standaard popup-animatie",
+          "default_stack": "Standaard stapelen van popups op dezelfde positie",
           "default_media_width": "Standaard mediabreedte (px)",
           "default_media_height": "Standaard mediahoogte (px)",
           "default_title_size": "Standaard titelgrootte (0 = app-standaard)",
@@ -61,15 +62,48 @@
           "default_border_width": "Standaard randdikte in px (leeg = geen)",
           "default_corner_radius": "Standaard hoekafronding in px (leeg = geen)",
           "default_icon_position": "Standaard icoon-positie (links/rechts)",
-          "default_icon_width": "Standaard icoon-breedte in px (leeg/0 = app-standaard)"
+          "default_icon_width": "Standaard icoon-breedte in px (leeg/0 = app-standaard)",
+          "overlay_pages": "Overlay-pagina's, één per regel: Naam | URL",
+          "parent_device": "Ouder-apparaat (tv)"
         },
         "data_description": {
-          "name_suffix": "Wordt achter alle entiteitsnamen van dit apparaat gezet (bv. \"Veranda\" geeft \"Popup Veranda\") zodat meerdere TV's te onderscheiden zijn in keuzelijsten."
+          "name_suffix": "Wordt achter alle entiteitsnamen van dit apparaat gezet (bv. \"Veranda\" geeft \"Popup Veranda\") zodat meerdere TV's te onderscheiden zijn in keuzelijsten.",
+          "overlay_pages": "De Pagina-keuzelijst van elke overlay biedt deze aan, plus Eigen URL. Voorbeeld: Agenda | http://192.168.1.10:8123/local/agenda.html",
+          "parent_device": "De tv waarop deze PiPup-app draait; het PiPup-apparaat staat daaronder. Leeg: automatisch gevonden via de Android TV-integraties (eerst remote, dan ADB) op hetzelfde IP-adres."
+        },
+        "sections": {
+          "advanced_install": {
+            "name": "Geavanceerd installeren",
+            "description": "Hoe de PiPup-app wordt bijgewerkt. Op Android < 12 vraagt de tv bij een self-update om een bevestiging met de afstandsbediening; een ingebouwde ADB-install (zoals install.sh) niet. Vereist netwerkfoutopsporing (ADB) op de tv.",
+            "data": {
+              "install_method": "Installatiemethode",
+              "adb_port": "ADB-poort",
+              "adb_key": "ADB-sleutel",
+              "auto_update": "Automatische updates",
+              "quiet_start": "Rustig venster vanaf",
+              "quiet_end": "Rustig venster tot"
+            },
+            "data_description": {
+              "install_method": "Self-update van de app: zoals voorheen; op Android < 12 vraagt de tv om een druk op OK. Automatisch: de eigen update van de app op Android 12+ (stil), een ADB-install op oudere versies. ADB: altijd ADB. Bij kiezen van Automatisch of ADB wordt de verbinding getest zodra je opslaat.",
+              "adb_key": "De eigen sleutel van PiPup (.storage/pipup_adbkey), of die van de Android TV-integratie, zodat een tv die die al vertrouwt geen nieuwe melding toont.",
+              "auto_update": "Installeer een nieuwe PiPup-release vanzelf binnen het rustige venster: één tv tegelijk, nooit terwijl er een popup in beeld is, en op een tv die aan staat wordt de app nooit geopend. Een geslaagde update komt alleen in het logboek; een mislukte wordt de volgende nacht opnieuw geprobeerd, met een repair na 3 mislukte nachten (of meteen als er op de tv iets opgelost moet worden). Vereist ADB op Android < 12.",
+              "quiet_start": "Lokale tijd. Een venster mag over middernacht lopen; dezelfde begin- en eindtijd = de hele dag."
+            }
+          }
         }
+      },
+      "adb_authorize": {
+        "title": "Foutopsporing toestaan op de tv",
+        "description": "De tv ({host}) toont nu \"Foutopsporing via USB toestaan?\" of \"Allow debugging from this computer?\". Vink **Altijd toestaan vanaf deze computer** aan en kies OK, en klik dan hier op Verzenden. Staat de melding er niet meer, klik dan Verzenden: hij komt opnieuw en er wordt 30 seconden gewacht."
       }
     },
     "error": {
-      "invalid_update_source": "Gebruik github:eigenaar/repo, een http(s)-map-URL met releases.json, of off."
+      "invalid_update_source": "Gebruik github:eigenaar/repo, een http(s)-map-URL met releases.json, of off.",
+      "adb_cannot_connect": "ADB op de tv is niet bereikbaar. Zet netwerkfoutopsporing (ADB) aan in de ontwikkelaarsopties en controleer de poort.",
+      "adb_not_authorized": "De tv heeft foutopsporing vanaf Home Assistant niet toegestaan.",
+      "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel.",
+      "adb_key_unreadable": "Het ADB-sleutelbestand (of de .pub ervan) is niet leesbaar. Kies de andere sleutel, of verwijder het beschadigde bestand uit .storage.",
+      "auto_update_needs_adb": "Op deze tv vraagt de eigen update van de app om een druk op de afstandsbediening, dus automatische updates vereisen installatiemethode Automatisch of ADB."
     }
   },
   "entity": {
@@ -102,8 +136,14 @@
       "uptime": {
         "name": "App-uptime"
       },
+      "app_version": {
+        "name": "App-versie"
+      },
       "popups_on_screen": {
         "name": "Popups op scherm"
+      },
+      "overlay_status": {
+        "name": "Status"
       }
     },
     "button": {
@@ -128,7 +168,49 @@
           "top_left": "Linksboven",
           "bottom_right": "Rechtsonder",
           "bottom_left": "Linksonder",
-          "center": "Midden"
+          "center": "Midden",
+          "top_center": "Midden boven",
+          "bottom_center": "Midden onder",
+          "center_left": "Midden links",
+          "center_right": "Midden rechts"
+        }
+      },
+      "overlay_animation": {
+        "name": "Animatie",
+        "state": {
+          "fade": "Vervagen",
+          "none": "Geen",
+          "slide_bottom": "Van onderen",
+          "slide_left": "Van links",
+          "slide_right": "Van rechts",
+          "slide_top": "Van boven"
+        }
+      },
+      "overlay_layout": {
+        "name": "Indeling"
+      },
+      "overlay_page": {
+        "name": "Pagina"
+      },
+      "overlay_position": {
+        "name": "Positie",
+        "state": {
+          "bottom_left": "Linksonder",
+          "bottom_right": "Rechtsonder",
+          "center": "Midden",
+          "top_left": "Linksboven",
+          "top_right": "Rechtsboven",
+          "top_center": "Boven midden",
+          "bottom_center": "Onder midden",
+          "center_left": "Midden links",
+          "center_right": "Midden rechts"
+        }
+      },
+      "overlay_sound": {
+        "name": "Geluid",
+        "state": {
+          "chime": "Belgeluid",
+          "none": "Geen"
         }
       }
     },
@@ -143,6 +225,55 @@
       },
       "overlay_bring_to_front": {
         "name": "Bovenop hertekenen"
+      },
+      "overlay_muted": {
+        "name": "Gedempt"
+      },
+      "overlay_show": {
+        "name": "Tonen"
+      },
+      "overlay_transparent": {
+        "name": "Transparant"
+      }
+    },
+    "number": {
+      "overlay_background_opacity": {
+        "name": "Dekking achtergrond"
+      },
+      "overlay_border_width": {
+        "name": "Randdikte"
+      },
+      "overlay_corner_radius": {
+        "name": "Hoekradius"
+      },
+      "overlay_duration": {
+        "name": "Duur"
+      },
+      "overlay_height": {
+        "name": "Hoogte"
+      },
+      "overlay_padding": {
+        "name": "Binnenmarge"
+      },
+      "overlay_page_opacity": {
+        "name": "Dekking pagina"
+      },
+      "overlay_width": {
+        "name": "Breedte"
+      }
+    },
+    "text": {
+      "overlay_background_color": {
+        "name": "Achtergrondkleur"
+      },
+      "overlay_border_color": {
+        "name": "Randkleur"
+      },
+      "overlay_custom_url": {
+        "name": "Eigen URL"
+      },
+      "overlay_title": {
+        "name": "Titel"
       }
     }
   },
@@ -153,7 +284,11 @@
         "top_left": "Linksboven",
         "bottom_right": "Rechtsonder",
         "bottom_left": "Linksonder",
-        "center": "Midden"
+        "center": "Midden",
+        "top_center": "Midden boven",
+        "bottom_center": "Midden onder",
+        "center_left": "Midden links",
+        "center_right": "Midden rechts"
       }
     },
     "camera_mode": {
@@ -188,6 +323,40 @@
         "slide_right": "Inschuiven van rechts",
         "slide_top": "Inschuiven van boven",
         "slide_bottom": "Inschuiven van onder"
+      }
+    },
+    "stack": {
+      "options": {
+        "none": "Geen (overlappen)",
+        "vertical": "Verticaal",
+        "horizontal": "Horizontaal"
+      }
+    },
+    "key": {
+      "options": {
+        "play_pause": "Afspelen/pauzeren",
+        "play": "Afspelen",
+        "pause": "Pauzeren",
+        "stop": "Stoppen",
+        "next": "Volgende",
+        "previous": "Vorige",
+        "rewind": "Terugspoelen",
+        "fast_forward": "Vooruitspoelen",
+        "home": "Home",
+        "back": "Terug"
+      }
+    },
+    "install_method": {
+      "options": {
+        "app": "Self-update van de app (standaard)",
+        "auto": "Automatisch: app op Android 12+, ADB daaronder",
+        "adb": "ADB-install"
+      }
+    },
+    "adb_key": {
+      "options": {
+        "own": "Eigen sleutel van PiPup",
+        "androidtv": "Sleutel van de Android TV-integratie"
       }
     }
   },
@@ -236,13 +405,17 @@
           "name": "Web-URL",
           "description": "Webpagina om te renderen (JavaScript en autoplay ingeschakeld)."
         },
+        "whep_url": {
+          "name": "WHEP-URL",
+          "description": "WebRTC-stream rechtstreeks van een WHEP-endpoint, bijvoorbeeld go2rtc's /api/webrtc?src=camera op poort 1984. Start sneller en stabieler dan de spelerpagina van go2rtc in web_url (app 0.25.0 of nieuwer)."
+        },
         "media_width": {
           "name": "Mediabreedte",
           "description": "Breedte in pixels (standaard 640)."
         },
         "media_height": {
           "name": "Mediahoogte",
-          "description": "Hoogte van de webview in pixels (standaard 360)."
+          "description": "Mediahoogte in pixels: de hoogte van de web-/WHEP-weergave (standaard 360), en bij een camera- of videopopup de hoogte van het kader totdat de stream zijn eigen verhouding doorgeeft, zodat een anamorfe camerasnapshot goed wordt weergegeven; oudere apps negeren dit."
         },
         "title_color": {
           "name": "Titelkleur",
@@ -267,6 +440,14 @@
         "muted": {
           "name": "Audio dempen",
           "description": "Dempt audio in video/web-streams. Zonder waarde geldt de apparaat-standaard (integratie-instellingen; audio kan het beeld op sommige TV’s bevriezen)."
+        },
+        "media_full_bleed": {
+          "name": "Media tot de rand",
+          "description": "Laat de video of afbeelding van rand tot rand over de bovenkant van de popup lopen, met de bovenhoeken afgerond zoals de popup; titel, bericht en knoppen houden hun opvulling. Oudere apps negeren dit."
+        },
+        "buttons_inline": {
+          "name": "Knoppen in de regel",
+          "description": "Zet de knoppen aan het eind van de titel-/berichtregel in plaats van op een eigen regel eronder, bijvoorbeeld één compacte ✕. Oudere apps negeren dit."
         },
         "tts": {
           "name": "Tekst uitspreken",
@@ -332,9 +513,33 @@
           "name": "Knopgrootte",
           "description": "Tekstgrootte van de knoppen in sp; de padding schaalt mee, zodat popups met knoppen klein kunnen (app 0.19.0 of nieuwer). Weglaten voor de klassieke look."
         },
+        "button_color": {
+          "name": "Knopkleur",
+          "description": "Vulkleur van een niet-geselecteerde knop als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor de klassieke stijl."
+        },
+        "button_focus_color": {
+          "name": "Knopkleur bij focus",
+          "description": "Vulkleur van de geselecteerde knop als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor het klassieke blauw."
+        },
+        "button_text_color": {
+          "name": "Tekstkleur knop",
+          "description": "Kleur van de knoptekst als #RRGGBB of #AARRGGBB; oudere apps negeren dit. Weglaten voor wit."
+        },
+        "button_border_color": {
+          "name": "Randkleur knop",
+          "description": "Kleur van de knoprand, met en zonder focus, als #RRGGBB of #AARRGGBB; oudere apps negeren dit."
+        },
+        "button_corner_radius": {
+          "name": "Hoekradius knop",
+          "description": "Hoekradius van de knoppen in pixels; 0 geeft vierkante hoeken, een grote waarde een pil. Oudere apps negeren dit."
+        },
         "animation": {
           "name": "Animatie",
           "description": "Verschijn-animatie, omgekeerd afgespeeld als de popup vanzelf afloopt. Een update-in-place van dezelfde popup animeert niet opnieuw (app 0.19.0 of nieuwer)."
+        },
+        "stack": {
+          "name": "Stapelen",
+          "description": "Rijg aan bij de andere stapelende popups op dezelfde positie in plaats van eroverheen: verticaal (weg van de boven- of onderrand) of horizontaal (weg van de linker- of rechterrand). De rest schuift op als er één sluit. Niet voor center (app 0.27.0 of nieuwer; een oudere app negeert het)."
         },
         "padding": {
           "name": "Padding",
@@ -342,15 +547,47 @@
         },
         "opacity": {
           "name": "Dekking",
-          "description": "Dekking van de hele popup, 0 tot 1; onder 1 schijnt de tv erdoorheen (app 0.22.0 of nieuwer, davbebawy-fork)."
+          "description": "Dekking van de hele popup, 0 tot 1; onder 1 schijnt de tv erdoorheen (app 0.24.0 of nieuwer)."
         },
         "transparent": {
           "name": "Transparante pagina",
-          "description": "Alleen web_url: de pagina krijgt geen eigen achtergrond, zodat een pagina met transparante body de tv erachter toont (app 0.22.0 of nieuwer, davbebawy-fork)."
+          "description": "Alleen web_url: de pagina krijgt geen eigen achtergrond, zodat een pagina met transparante body de tv erachter toont (app 0.24.0 of nieuwer)."
         },
         "bring_to_front": {
           "name": "Bovenop hertekenen",
-          "description": "Alleen als een popup met dit ID al op de tv staat: teken de nieuwe bovenop de andere popups in plaats van op de oude plek (app 0.24.0 of nieuwer, davbebawy-fork)."
+          "description": "Alleen als een popup met dit ID al op de tv staat: teken de nieuwe bovenop de andere popups in plaats van op de oude plek (app 0.24.0 of nieuwer)."
+        },
+        "live_badge": {
+          "name": "Live-badge",
+          "description": "Toon een Live-label op een camera- of videopopup zodra de stream speelt (nooit op de stilstaande afbeelding); oudere apps negeren dit."
+        },
+        "live_badge_color": {
+          "name": "Kleur live-badge",
+          "description": "Kleur van het Live-label als #RRGGBB of #AARRGGBB; standaard amber."
+        },
+        "live_badge_position": {
+          "name": "Positie live-badge",
+          "description": "Hoek van de video voor het Live-label; standaard rechtsonder."
+        },
+        "grid": {
+          "name": "Cameramuur",
+          "description": "Tot 9 WHEP-streams in één popup (app 0.29.0 of nieuwer): een lijst WHEP-URL's, of items met whep_url, label en poster_url. Allemaal van dezelfde server. media_width/media_height bepalen de maat van het hele raster."
+        },
+        "grid_columns": {
+          "name": "Rasterkolommen",
+          "description": "Aantal kolommen. Leeg = automatisch (2 tot en met 4 tegels, daarboven 3)."
+        },
+        "grid_fullscreen": {
+          "name": "Raster schermvullend",
+          "description": "Laat de cameramuur het hele scherm vullen. Zonder eigen positie of padding staat de popup gecentreerd en van rand tot rand."
+        },
+        "grid_labels": {
+          "name": "Rasterlabels",
+          "description": "Toon het label van elke tegel."
+        },
+        "fullscreen": {
+          "name": "Schermvullend",
+          "description": "Bedek het hele scherm, inclusief status- en navigatiebalk, met de popup gecentreerd (app 0.29.1 of nieuwer). Van belang op apparaten met systeembalken (tablets, intercompanelen); op een tv ziet het er hetzelfde uit. Voor een pagina zonder rand: padding 0 en randbreedte 0."
         }
       }
     },
@@ -381,6 +618,34 @@
     "sync": {
       "name": "Synchroniseren",
       "description": "Leest nu de status van de gekozen PiPup-apparaten en stuurt de push-webhook opnieuw naar de app."
+    },
+    "launch_app": {
+      "name": "App starten",
+      "description": "Start een app op de tv of opent een deeplink (app 0.29.0 of nieuwer). Een slapend scherm wordt eerst gewekt.",
+      "fields": {
+        "package": {
+          "name": "Pakket",
+          "description": "Android-pakketnaam, bijv. com.netflix.ninja. De bronnenlijst van de mediaspeler toont de geïnstalleerde apps."
+        },
+        "uri": {
+          "name": "Link",
+          "description": "Deeplink om te openen, bijv. een YouTube-URL. Met een pakket erbij opent alleen die app hem."
+        },
+        "wake": {
+          "name": "Scherm wekken",
+          "description": "Zet een slapend scherm eerst aan."
+        }
+      }
+    },
+    "send_key": {
+      "name": "Toets sturen",
+      "description": "Stuurt een mediatoets naar de app die speelt, of home/terug (die hebben de toegankelijkheidsdienst nodig). App 0.29.0 of nieuwer.",
+      "fields": {
+        "key": {
+          "name": "Toets",
+          "description": "De toets om te sturen."
+        }
+      }
     }
   },
   "issues": {
@@ -401,6 +666,39 @@
           "use_adb": "Deze tv heeft geen scherm voor die permissie (Fire TV antwoordt bijvoorbeeld met een lege placeholder). Ken 'm toe via adb:\\n\\n`adb shell appops set nl.rogro82.pipup SYSTEM_ALERT_WINDOW allow`",
           "cannot_connect": "De tv antwoordde niet. Probeer het opnieuw als hij bereikbaar is.",
           "not_loaded": "Dit PiPup-apparaat is nu niet geladen."
+        }
+      }
+    },
+    "auto_update_failed": {
+      "title": "Automatische PiPup-update op {name} mislukt",
+      "description": "De automatische update van de PiPup-app op {name} is mislukt ({failures}× achter elkaar): {reason}.\n\nHij wordt elke nacht opnieuw geprobeerd. Los de oorzaak op (zie de opties van de integratie, Geavanceerd installeren), of druk op Installeren bij de update-entiteit om het nu te proberen. Deze melding verdwijnt na de volgende geslaagde update."
+    }
+  },
+  "config_subentries": {
+    "overlay": {
+      "abort": {
+        "reconfigure_successful": "Overlay hernoemd."
+      },
+      "entry_type": "Overlay",
+      "error": {
+        "invalid_overlay_name": "Gebruik minstens één letter of cijfer."
+      },
+      "initiate_flow": {
+        "user": "Overlay toevoegen"
+      },
+      "step": {
+        "reconfigure": {
+          "data": {
+            "name": "Naam"
+          },
+          "title": "Overlay hernoemen"
+        },
+        "user": {
+          "data": {
+            "name": "Naam"
+          },
+          "description": "Een webpagina die over het tv-beeld blijft staan, met een eigen schakelaar en instellingen. De pagina's komen uit de lijst in het Configureren-formulier van deze tv.",
+          "title": "Overlay toevoegen"
         }
       }
     }

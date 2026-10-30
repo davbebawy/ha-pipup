@@ -5,7 +5,9 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import secrets
 from typing import Any
 
@@ -14,6 +16,7 @@ import voluptuous as vol
 from homeassistant.components import webhook as webhook_component
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
+from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.network import get_url
@@ -23,6 +26,7 @@ from homeassistant.util import dt as dt_util
 from .api import PiPupError, PiPupUnsupportedError
 from .const import (
     ANIMATIONS,
+    STACKS,
     ATTR_BACKGROUND_COLOR,
     ATTR_PERMISSION,
     ATTR_BORDER_COLOR,
@@ -33,12 +37,24 @@ from .const import (
     ATTR_CORNER_RADIUS,
     ATTR_DURATION,
     ATTR_ANIMATION,
+    ATTR_STACK,
     ATTR_BUTTON_SIZE,
+    ATTR_BUTTON_BORDER_COLOR,
+    ATTR_BUTTON_COLOR,
+    ATTR_BUTTON_CORNER_RADIUS,
+    ATTR_BUTTON_FOCUS_COLOR,
+    ATTR_BUTTON_TEXT_COLOR,
+    ATTR_LIVE_BADGE,
+    ATTR_LIVE_BADGE_COLOR,
+    ATTR_LIVE_BADGE_POSITION,
+    LIVE_BADGE_POSITIONS,
     ATTR_DISMISS_SCREENSAVER,
     ATTR_ICON,
     ATTR_ICON_POSITION,
     ATTR_ICON_WIDTH,
     ATTR_IMAGE_URL,
+    ATTR_BUTTONS_INLINE,
+    ATTR_MEDIA_FULL_BLEED,
     ATTR_MEDIA_HEIGHT,
     ATTR_MEDIA_WIDTH,
     ATTR_MESSAGE,
@@ -64,6 +80,21 @@ from .const import (
     ATTR_URGENCY,
     ATTR_VIDEO_URL,
     ATTR_WEB_URL,
+    ATTR_WHEP_URL,
+    ATTR_GRID,
+    ATTR_GRID_COLUMNS,
+    ATTR_GRID_FULLSCREEN,
+    ATTR_GRID_LABELS,
+    ATTR_FULLSCREEN,
+    ATTR_KEY,
+    ATTR_PACKAGE,
+    ATTR_URI,
+    ATTR_WAKE,
+    CONTROL_MIN_APP_VERSION,
+    GRID_MAX_TILES,
+    KEYS,
+    SERVICE_LAUNCH_APP,
+    SERVICE_SEND_KEY,
     BUTTON_TOKEN_TTL,
     CAMERA_MODE_MJPEG,
     CAMERA_MODE_SNAPSHOT,
@@ -75,6 +106,7 @@ from .const import (
     CONF_DEFAULT_DURATION,
     CONF_DEFAULT_ICON_POSITION,
     CONF_DEFAULT_ANIMATION,
+    CONF_DEFAULT_STACK,
     CONF_DEFAULT_BUTTON_SIZE,
     CONF_DEFAULT_DISMISS_SCREENSAVER,
     CONF_DEFAULT_ICON_WIDTH,
@@ -94,6 +126,8 @@ from .const import (
     ICON_POSITIONS,
     PERMISSIONS,
     EVENT_BUTTON,
+    MEDIA_MIN_APP_VERSION,
+    POSITION_MIN_APP_VERSION,
     POSITIONS,
     SERVICE_DISMISS,
     SERVICE_SYNC,
@@ -109,6 +143,23 @@ COLOR_REGEX = r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$|^#[0-9a-fA-F]{8}$"
 
 # NB: geen schema-defaults voor duration/position/muted e.d. — een niet
 # meegegeven veld valt terug op de per-apparaat default (options flow).
+def _grid_tile(value: Any) -> dict[str, str]:
+    """One camera-wall tile: a WHEP URL, or {whep_url, label, poster_url}."""
+    if isinstance(value, str):
+        value = {"whep_url": value}
+    if not isinstance(value, dict):
+        raise vol.Invalid("a grid tile is a WHEP URL or a mapping with whep_url")
+    url = value.get("whep_url") or value.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise vol.Invalid("a grid tile needs whep_url")
+    tile = {"uri": url.strip()}
+    if label := value.get("label"):
+        tile["label"] = str(label)
+    if poster := value.get("poster_url") or value.get("poster"):
+        tile["poster"] = str(poster)
+    return tile
+
+
 SHOW_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TITLE): cv.string,
@@ -128,6 +179,14 @@ SHOW_SCHEMA = vol.Schema(
         vol.Optional(ATTR_IMAGE_URL): cv.string,
         vol.Optional(ATTR_VIDEO_URL): cv.string,
         vol.Optional(ATTR_WEB_URL): cv.string,
+        vol.Optional(ATTR_WHEP_URL): cv.string,
+        vol.Optional(ATTR_GRID): vol.All(
+            cv.ensure_list, [_grid_tile], vol.Length(min=1, max=GRID_MAX_TILES)
+        ),
+        vol.Optional(ATTR_GRID_COLUMNS): vol.All(vol.Coerce(int), vol.Range(min=1, max=GRID_MAX_TILES)),
+        vol.Optional(ATTR_GRID_FULLSCREEN): cv.boolean,
+        vol.Optional(ATTR_GRID_LABELS): cv.boolean,
+        vol.Optional(ATTR_FULLSCREEN): cv.boolean,
         vol.Optional(ATTR_POSTER_URL): cv.string,
         vol.Optional(ATTR_MEDIA_WIDTH): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=3840)
@@ -136,12 +195,25 @@ SHOW_SCHEMA = vol.Schema(
             vol.Coerce(int), vol.Range(min=1, max=2160)
         ),
         vol.Optional(ATTR_MUTED): cv.boolean,
+        vol.Optional(ATTR_MEDIA_FULL_BLEED): cv.boolean,
+        vol.Optional(ATTR_BUTTONS_INLINE): cv.boolean,
         vol.Optional(ATTR_BUTTON_SIZE): vol.All(vol.Coerce(float), vol.Range(min=4, max=96)),
+        vol.Optional(ATTR_BUTTON_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_FOCUS_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_TEXT_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_BORDER_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_BUTTON_CORNER_RADIUS): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=128)
+        ),
         vol.Optional(ATTR_PADDING): vol.All(vol.Coerce(int), vol.Range(min=0, max=256)),
         vol.Optional(ATTR_OPACITY): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional(ATTR_TRANSPARENT): cv.boolean,
         vol.Optional(ATTR_BRING_TO_FRONT): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE): cv.boolean,
+        vol.Optional(ATTR_LIVE_BADGE_COLOR): vol.Match(COLOR_REGEX),
+        vol.Optional(ATTR_LIVE_BADGE_POSITION): vol.In(LIVE_BADGE_POSITIONS),
         vol.Optional(ATTR_ANIMATION): vol.In(ANIMATIONS),
+        vol.Optional(ATTR_STACK): vol.In(STACKS),
         vol.Optional(ATTR_SOUND): cv.string,
         vol.Optional(ATTR_SOUND_VOLUME): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional(ATTR_DISMISS_SCREENSAVER): cv.boolean,
@@ -190,6 +262,20 @@ FIX_PERMISSION_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+LAUNCH_APP_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_PACKAGE): vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_.]{1,255}$")),
+        vol.Optional(ATTR_URI): cv.string,
+        vol.Optional(ATTR_WAKE, default=True): cv.boolean,
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+SEND_KEY_SCHEMA = vol.Schema(
+    {vol.Required(ATTR_KEY): vol.In(KEYS)},
+    extra=vol.ALLOW_EXTRA,
+)
+
 DISMISS_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_POPUP_ID): vol.All(
@@ -199,6 +285,43 @@ DISMISS_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
+
+
+def unsupported_position(position: str, app_version: str | None) -> str | None:
+    """Return the minimum app version when this app cannot show the position yet.
+
+    An unknown app version (TV not reached yet) is let through: the request then
+    fails or succeeds on the TV as before.
+    """
+    return _needs_newer_app(POSITION_MIN_APP_VERSION.get(position), app_version)
+
+
+def unsupported_media(payload: dict[str, Any], app_version: str | None) -> tuple[str, str] | None:
+    """Return (media type, minimum app version) when this app cannot play the payload's media."""
+    for kind in payload.get("media") or {}:
+        if required := _needs_newer_app(MEDIA_MIN_APP_VERSION.get(kind), app_version):
+            return kind, required
+    return None
+
+
+_VERSION_CORE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+
+
+def _needs_newer_app(required: str | None, app_version: str | None) -> str | None:
+    """Return `required` when `app_version` is older; None when fine or unknown.
+
+    Only the numeric x.y.z core counts: a build such as "0.25.0-rc1" or "0.25.0-debug"
+    has the 0.25.0 features, while AwesomeVersion would rank it below 0.25.0.
+    """
+    if required is None or not app_version:
+        return None
+    have, need = _VERSION_CORE.match(app_version.strip()), _VERSION_CORE.match(required)
+    if have and need:
+        return required if tuple(map(int, have.groups())) < tuple(map(int, need.groups())) else None
+    try:
+        return required if AwesomeVersion(app_version) < AwesomeVersion(required) else None
+    except AwesomeVersionException:
+        return None
 
 
 async def _coordinators_for_call(hass: HomeAssistant, call: ServiceCall) -> list:
@@ -271,6 +394,9 @@ def build_device_payload(
     }
     if popup_id := data.get(ATTR_POPUP_ID):
         payload["id"] = popup_id
+    # app >= 0.29.1 (older ones ignore it): a window over the whole display, bars included
+    if data.get(ATTR_FULLSCREEN):
+        payload["fullscreen"] = True
     if title := data.get(ATTR_TITLE):
         payload["title"] = title
     if message := data.get(ATTR_MESSAGE):
@@ -279,19 +405,51 @@ def build_device_payload(
     # per-device default. "none" suppresses a default animation for one call.
     if (button_size := pick(ATTR_BUTTON_SIZE, CONF_DEFAULT_BUTTON_SIZE, None)):
         payload["buttonSize"] = button_size
+    # app >= 0.28.0 (older ones ignore it): button style; each part is sent only when set
+    for attr, key in (
+        (ATTR_BUTTON_COLOR, "buttonColor"),
+        (ATTR_BUTTON_FOCUS_COLOR, "buttonFocusColor"),
+        (ATTR_BUTTON_TEXT_COLOR, "buttonTextColor"),
+        (ATTR_BUTTON_BORDER_COLOR, "buttonBorderColor"),
+    ):
+        if color := data.get(attr):
+            payload[key] = color
+    if (radius := data.get(ATTR_BUTTON_CORNER_RADIUS)) is not None:
+        payload["buttonCornerRadius"] = radius
     if (padding := data.get(ATTR_PADDING)) is not None:
         payload["padding"] = padding
-    # app >= 0.22.0 (davbebawy fork): whole-popup alpha; an older app ignores it
+    # app >= 0.24.0: whole-popup alpha; an older app ignores it
     if (opacity := data.get(ATTR_OPACITY)) is not None:
         payload["opacity"] = opacity
-    # app >= 0.24.0 (davbebawy fork): a redraw opens on top of the other popups
+    # app >= 0.24.0: a redraw opens on top of the other popups
     if data.get(ATTR_BRING_TO_FRONT):
         payload["bringToFront"] = True
+    # app >= 0.28.0 (older ones ignore it): a LIVE pill over the stream once it plays
+    if data.get(ATTR_LIVE_BADGE):
+        payload["liveBadge"] = True
+        if color := data.get(ATTR_LIVE_BADGE_COLOR):
+            payload["liveBadgeColor"] = color
+        if position := data.get(ATTR_LIVE_BADGE_POSITION):
+            payload["liveBadgePosition"] = position
+    # app >= 0.28.0 (older ones ignore it): media edge to edge, text and buttons padded
+    if data.get(ATTR_MEDIA_FULL_BLEED):
+        payload["mediaFullBleed"] = True
+    # app >= 0.28.0: buttons at the end of the title/message row instead of below it
+    if data.get(ATTR_BUTTONS_INLINE):
+        payload["buttonsInline"] = True
     animation = data.get(ATTR_ANIMATION)
     if animation is None:
         animation = opts.get(CONF_DEFAULT_ANIMATION)
     if animation and animation != "none":
         payload["animation"] = animation
+    # app >= 0.27.0: stack along the edge with the other popups at that position (#64);
+    # per-call value first, then the per-device default. An older app ignores the field,
+    # so popups just overlap there as before - no version gate needed.
+    stack = data.get(ATTR_STACK)
+    if stack is None:
+        stack = opts.get(CONF_DEFAULT_STACK)
+    if stack and stack != "none":
+        payload["stack"] = stack
 
     # app >= 0.18.0: notification sound. "default" = built-in chime, else a URL. Per-call
     # value first, then the per-device default; an explicit empty string in the call means
@@ -363,8 +521,16 @@ def build_device_payload(
     height = pick(ATTR_MEDIA_HEIGHT, CONF_DEFAULT_MEDIA_HEIGHT, 360)
     muted = data.get(ATTR_MUTED, opts.get(CONF_DEFAULT_MUTED, True))
 
+    # app >= 0.28.0 (older ones ignore it): an explicit per-call media_height fixes a video popup's box until the
+    # stream reports its display aspect, so an anamorphic camera snapshot (an NVR's 704x480
+    # still of a 4:3 picture) shows at the right shape. Only a per-call value is sent: the
+    # per-device default would change every existing video popup's poster sizing.
+    video_height = data.get(ATTR_MEDIA_HEIGHT)
+
     if stream_uri:
         payload["media"] = {"video": {"uri": stream_uri, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif web_uri:
         payload["media"] = {
             "web": {"uri": web_uri, "width": width, "height": height, "muted": muted}
@@ -373,12 +539,45 @@ def build_device_payload(
         payload["media"] = {
             "web": {"uri": url, "width": width, "height": height, "muted": muted}
         }
-        # app >= 0.22.0 (davbebawy fork): no WebView background, so a page with a
+        # app >= 0.24.0: no WebView background, so a page with a
         # transparent body shows the TV behind it
         if data.get(ATTR_TRANSPARENT):
             payload["media"]["web"]["transparent"] = True
+    elif tiles := data.get(ATTR_GRID):
+        # app >= 0.29.0: a camera wall, one WHEP stream per tile; media_width/height size
+        # the whole grid, grid_fullscreen fills the screen
+        grid: dict[str, Any] = {
+            "items": tiles,
+            "width": data.get(ATTR_MEDIA_WIDTH) or 1280,
+            "height": data.get(ATTR_MEDIA_HEIGHT) or 720,
+            "muted": muted,
+        }
+        if (columns := data.get(ATTR_GRID_COLUMNS)) is not None:
+            grid["columns"] = columns
+        if data.get(ATTR_GRID_LABELS) is False:
+            grid["labels"] = False
+        if data.get(ATTR_GRID_FULLSCREEN):
+            grid["fullscreen"] = True
+            payload["fullscreen"] = True
+            # a wall is meant edge to edge: centred and without the popup margin,
+            # unless the call says otherwise
+            if ATTR_POSITION not in data:
+                payload["position"] = POSITIONS["center"]
+            if ATTR_PADDING not in data:
+                payload["padding"] = 0
+        payload["media"] = {"grid": grid}
+    elif url := data.get(ATTR_WHEP_URL):
+        # app >= 0.25.0: the app negotiates WebRTC with the endpoint itself, without
+        # loading the server's player page (go2rtc: http://host:1984/api/webrtc?src=<name>)
+        payload["media"] = {
+            "whep": {"uri": url, "width": width, "height": height, "muted": muted}
+        }
+        if data.get(ATTR_TRANSPARENT):
+            payload["media"]["whep"]["transparent"] = True
     elif url := data.get(ATTR_VIDEO_URL):
         payload["media"] = {"video": {"uri": url, "width": width, "muted": muted}}
+        if video_height:
+            payload["media"]["video"]["height"] = video_height
     elif url := data.get(ATTR_IMAGE_URL):
         payload["media"] = {"image": {"uri": url, "width": width}}
 
@@ -386,7 +585,7 @@ def build_device_payload(
     # renders, so a live popup never opens as an empty box while the stream connects.
     # An explicit poster_url wins; a camera_entity popup gets its own snapshot for free.
     media = payload.get("media") or {}
-    kind = next((k for k in ("video", "web") if k in media), None)
+    kind = next((k for k in ("video", "web", "whep") if k in media), None)
     if kind and (poster := data.get(ATTR_POSTER_URL) or poster_uri):
         media[kind]["poster"] = poster
 
@@ -455,13 +654,22 @@ async def _camera_media(
     return f"{base_url}{stream_path}", None, None, poster
 
 
-def _issue_button_token(hass: HomeAssistant, popup_id: str | None) -> str:
+def _issue_button_token(
+    hass: HomeAssistant,
+    popup_id: str | None,
+    buttons: list[dict[str, Any]] | None = None,
+    coordinator: Any = None,
+) -> str:
     """Mint a single-use token for a button popup and remember it.
 
     The token travels in the callback URL and must come back on the button
     press, so a device on the LAN cannot forge a pipup_button event by POSTing
     a guessed device id — which matters when button events drive things like a
     door lock. Expired tokens are swept on each issue.
+
+    The token is bound to what was shown: the popup id, the buttons on it and the
+    TV it went to. The event is built from that, not from the callback body, so a
+    token holder cannot turn one popup's token into another popup's (or TV's) press.
     """
     tokens: dict[str, dict[str, Any]] = hass.data.setdefault(DOMAIN, {}).setdefault(
         DATA_BUTTON_TOKENS, {}
@@ -469,8 +677,24 @@ def _issue_button_token(hass: HomeAssistant, popup_id: str | None) -> str:
     now = dt_util.utcnow()
     for tok in [t for t, meta in tokens.items() if meta["expires"] < now]:
         tokens.pop(tok, None)
+    device_id: str | None = None
+    device_name: str | None = None
+    if coordinator is not None:
+        state = coordinator.data or {}
+        entry = coordinator.config_entry
+        # the app's stable id and name, as the app itself puts them in the callback
+        device_id = state.get("id") or entry.unique_id
+        device_name = state.get("name")
     token = secrets.token_urlsafe(24)
-    tokens[token] = {"popup_id": popup_id, "expires": now + BUTTON_TOKEN_TTL}
+    tokens[token] = {
+        "popup_id": popup_id,
+        "buttons": [
+            {"id": b.get("id"), "label": b.get("label")} for b in buttons or []
+        ],
+        "device_id": device_id,
+        "device_name": device_name,
+        "expires": now + BUTTON_TOKEN_TTL,
+    }
     return token
 
 
@@ -497,16 +721,51 @@ async def _handle_button_webhook(hass: HomeAssistant, webhook_id: str, request) 
         _LOGGER.warning("Invalid JSON on %s webhook", webhook_id)
         return
     _LOGGER.debug("Popup button pressed: %s", data)
+    if not isinstance(data, dict):
+        _LOGGER.warning("Invalid payload on %s webhook", webhook_id)
+        return
+    # Only a button that was on the popup this token was issued for counts; popup,
+    # label and TV come from what HA showed, never from the request body.
+    button = data.get("button")
+    issued = next((b for b in meta.get("buttons") or [] if b["id"] == button), None)
+    if issued is None:
+        _LOGGER.warning(
+            "Rejecting PiPup button callback: button %r was not on popup %r",
+            button, meta.get("popup_id"),
+        )
+        return
     hass.bus.async_fire(
         EVENT_BUTTON,
         {
-            "popup_id": data.get("popup"),
-            "button": data.get("button"),
-            "label": data.get("label"),
-            "device_id": data.get("device"),
-            "device_name": data.get("name"),
+            "popup_id": meta.get("popup_id"),
+            "button": issued["id"],
+            "label": issued["label"],
+            "device_id": meta.get("device_id"),
+            "device_name": meta.get("device_name"),
         },
     )
+
+
+async def _refresh_unless_pushed(coordinator) -> None:
+    """Read /state after a call, unless the app pushes the change itself.
+
+    An app with push (>= 0.24.0) posts popup_shown/popup_removed on its own, so the
+    extra settle delay plus /state round-trip only slowed the action down.
+    """
+    if not coordinator.push_active:
+        await coordinator.async_refresh_soon()
+
+
+def _raise_errors(results: list[Any]) -> None:
+    """Raise the per-TV errors of a gathered call, in target order, as one message."""
+    errors: list[str] = []
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result  # not a TV error: surface it as before
+        if result:
+            errors.append(result)
+    if errors:
+        raise HomeAssistantError("; ".join(errors))
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -552,16 +811,31 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             else None
         )
 
-        errors: list[str] = []
-        for coordinator in coordinators:
+        async def _show_on(coordinator) -> str | None:
+            """Show the popup on one TV; the error text, or None when it worked."""
             opts = dict(coordinator.config_entry.options)
             # A fresh single-use token per device: the button press must return
             # it in the callback URL for the pipup_button event to fire.
             callback_url: str | None = None
             if want_buttons:
-                token = _issue_button_token(hass, data.get(ATTR_POPUP_ID))
+                token = _issue_button_token(
+                    hass, data.get(ATTR_POPUP_ID), data.get(ATTR_BUTTONS), coordinator
+                )
                 callback_url = f"{base_url}/api/webhook/{WEBHOOK_ID}?token={token}"
+            position = data.get(ATTR_POSITION) or opts.get(CONF_DEFAULT_POSITION, DEFAULT_POSITION)
+            app_version = (coordinator.data or {}).get("version")
+            if required := unsupported_position(position, app_version):
+                return (
+                    f"{coordinator.config_entry.title}: position '{position}' needs "
+                    f"PiPup app {required} or newer (this TV runs {app_version})"
+                )
             payload = build_device_payload(data, opts, stream_uri, web_uri, callback_url, poster_uri)
+            if unsupported := unsupported_media(payload, app_version):
+                return (
+                    f"{coordinator.config_entry.title}: "
+                    f"{unsupported[0] if unsupported[0] == 'grid' else unsupported[0] + '_url'} needs "
+                    f"PiPup app {unsupported[1]} or newer (this TV runs {app_version})"
+                )
             try:
                 if snapshot is not None:
                     fields = {
@@ -578,28 +852,79 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     await coordinator.client.notify_image(fields, snapshot)
                 else:
                     await coordinator.client.notify(payload)
-                await coordinator.async_refresh_soon()
+                await _refresh_unless_pushed(coordinator)
             except PiPupError as err:
-                errors.append(str(err))
+                return str(err)
+            return None
 
-        if errors:
-            raise HomeAssistantError("; ".join(errors))
+        # every TV at once: one slow or unreachable TV no longer holds up the others
+        _raise_errors(
+            await asyncio.gather(
+                *(_show_on(c) for c in coordinators), return_exceptions=True
+            )
+        )
 
     async def handle_dismiss(call: ServiceCall) -> None:
         coordinators = await _coordinators_for_call(hass, call)
         popup_id = call.data.get(ATTR_POPUP_ID)
         all_popups = call.data.get(ATTR_ALL, False)
 
-        errors: list[str] = []
-        for coordinator in coordinators:
+        async def _dismiss_on(coordinator) -> str | None:
             try:
                 await coordinator.client.cancel(popup_id, all_popups=all_popups)
-                await coordinator.async_refresh_soon()
+                await _refresh_unless_pushed(coordinator)
             except PiPupError as err:
-                errors.append(str(err))
+                return str(err)
+            return None
 
-        if errors:
-            raise HomeAssistantError("; ".join(errors))
+        _raise_errors(
+            await asyncio.gather(
+                *(_dismiss_on(c) for c in coordinators), return_exceptions=True
+            )
+        )
+
+    def _control_unsupported(coordinator) -> str | None:
+        """Why this TV cannot take TV-control calls, or None."""
+        data = coordinator.data or {}
+        if isinstance(data.get("control"), dict):
+            return None
+        version = data.get("version")
+        if version and not _needs_newer_app(CONTROL_MIN_APP_VERSION, version):
+            return None  # new enough; /state just not read since the update
+        return (
+            f"{coordinator.config_entry.title}: TV control needs PiPup app "
+            f"{CONTROL_MIN_APP_VERSION} or newer (this TV runs {version or 'unknown'})"
+        )
+
+    async def _control_on_all(call: ServiceCall, action) -> None:
+        coordinators = await _coordinators_for_call(hass, call)
+
+        async def _one(coordinator) -> str | None:
+            if reason := _control_unsupported(coordinator):
+                return reason
+            try:
+                await action(coordinator.client)
+                await _refresh_unless_pushed(coordinator)
+            except PiPupError as err:
+                return f"{coordinator.config_entry.title}: {err}"
+            return None
+
+        _raise_errors(
+            await asyncio.gather(*(_one(c) for c in coordinators), return_exceptions=True)
+        )
+
+    async def handle_launch_app(call: ServiceCall) -> None:
+        package = call.data.get(ATTR_PACKAGE)
+        uri = call.data.get(ATTR_URI)
+        if not package and not uri:
+            raise HomeAssistantError("launch_app needs a package and/or a uri")
+        await _control_on_all(
+            call, lambda client: client.launch(package=package, uri=uri, wake=call.data[ATTR_WAKE])
+        )
+
+    async def handle_send_key(call: ServiceCall) -> None:
+        key = call.data[ATTR_KEY]
+        await _control_on_all(call, lambda client: client.key(key))
 
     async def handle_sync(call: ServiceCall) -> None:
         """Read /state now on the targeted TV(s) and re-send the push webhook."""
@@ -646,4 +971,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SYNC, handle_sync, schema=vol.Schema({}, extra=vol.ALLOW_EXTRA)
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_LAUNCH_APP, handle_launch_app, schema=LAUNCH_APP_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SEND_KEY, handle_send_key, schema=SEND_KEY_SCHEMA
     )

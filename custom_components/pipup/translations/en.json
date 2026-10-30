@@ -50,6 +50,7 @@
           "default_dismiss_screensaver": "End the screensaver before showing a popup (default)",
           "default_button_size": "Default button text size (sp; 0 = classic look)",
           "default_animation": "Default popup animation",
+          "default_stack": "Default stacking of popups at the same position",
           "default_media_width": "Default media width (px)",
           "default_media_height": "Default media height (px)",
           "default_title_size": "Default title size (0 = app default)",
@@ -62,16 +63,47 @@
           "default_corner_radius": "Default corner radius in px (empty = none)",
           "default_icon_position": "Default icon position (left/right)",
           "default_icon_width": "Default icon width in px (empty/0 = app default)",
-          "overlay_pages": "Overlay pages, one per line: Name | URL"
+          "overlay_pages": "Overlay pages, one per line: Name | URL",
+          "parent_device": "Parent device (TV)"
         },
         "data_description": {
           "name_suffix": "Appended to all entity names of this device (e.g. \"Veranda\" gives \"Popup Veranda\") so multiple TVs stay distinguishable in pickers.",
-          "overlay_pages": "Every overlay's Page select offers these, plus Custom URL. Example: Fantasy | https://fantasy.bebawys.uk/tv"
+          "overlay_pages": "Every overlay's Page select offers these, plus Custom URL. Example: Agenda | http://192.168.1.10:8123/local/agenda.html",
+          "parent_device": "The TV this PiPup app runs on; the PiPup device is shown under it. Empty: found automatically from the Android TV integrations (remote first, then ADB) on the same IP address."
+        },
+        "sections": {
+          "advanced_install": {
+            "name": "Advanced install",
+            "description": "How the PiPup app is updated. On Android < 12 the TV asks for a remote press on a self-update; a built-in ADB install (like install.sh) does not. Needs network debugging (ADB) on the TV.",
+            "data": {
+              "install_method": "Install method",
+              "adb_port": "ADB port",
+              "adb_key": "ADB key",
+              "auto_update": "Automatic updates",
+              "quiet_start": "Quiet window from",
+              "quiet_end": "Quiet window until"
+            },
+            "data_description": {
+              "install_method": "App self-update: as before; on Android < 12 the TV asks for a press of OK. Auto: the app's own update on Android 12+ (silent), an ADB install on older versions. ADB: always ADB. Choosing Auto or ADB tests the connection when you save.",
+              "adb_key": "PiPup's own key (.storage/pipup_adbkey), or the Android TV integration's, so a TV that already trusts it shows no new prompt.",
+              "auto_update": "Install a new PiPup release by itself inside the quiet window: one TV at a time, never while a popup is on screen, and on a TV that is on the app is never opened. Success only writes a logbook entry; a failure retries the next night, with a repair after 3 failed nights (or at once when something on the TV needs fixing). Needs ADB on Android < 12.",
+              "quiet_start": "Local time. A window may cross midnight; the same start and end time = all day."
+            }
+          }
         }
+      },
+      "adb_authorize": {
+        "title": "Allow debugging on the TV",
+        "description": "The TV ({host}) now shows \"Allow debugging from this computer?\" (or \"Allow USB debugging?\"). Tick **Always allow from this computer**, choose OK, then click Submit here. If the prompt is gone, click Submit: it comes back and Home Assistant waits 30 seconds."
       }
     },
     "error": {
-      "invalid_update_source": "Use github:owner/repo, an http(s) folder URL with releases.json, or off."
+      "invalid_update_source": "Use github:owner/repo, an http(s) folder URL with releases.json, or off.",
+      "adb_cannot_connect": "Cannot reach ADB on the TV. Turn on network debugging (ADB) in the developer options and check the port.",
+      "adb_not_authorized": "The TV did not allow debugging from Home Assistant.",
+      "adb_no_androidtv_key": "The Android TV integration's ADB key does not exist. Choose the own key.",
+      "adb_key_unreadable": "The ADB key file (or its .pub) cannot be read. Choose the other key, or remove the damaged file from .storage.",
+      "auto_update_needs_adb": "On this TV the app's own update needs a press on the remote, so automatic updates need the install method Auto or ADB."
     }
   },
   "entity": {
@@ -104,6 +136,9 @@
       "uptime": {
         "name": "App uptime"
       },
+      "app_version": {
+        "name": "App version"
+      },
       "overlay_status": {
         "name": "Status"
       },
@@ -133,7 +168,11 @@
           "top_left": "Top left",
           "bottom_right": "Bottom right",
           "bottom_left": "Bottom left",
-          "center": "Center"
+          "center": "Center",
+          "top_center": "Top center",
+          "bottom_center": "Bottom center",
+          "center_left": "Center left",
+          "center_right": "Center right"
         }
       },
       "overlay_page": {
@@ -149,7 +188,11 @@
           "top_left": "Top left",
           "bottom_right": "Bottom right",
           "bottom_left": "Bottom left",
-          "center": "Center"
+          "center": "Center",
+          "top_center": "Top center",
+          "bottom_center": "Bottom center",
+          "center_left": "Center left",
+          "center_right": "Center right"
         }
       },
       "overlay_animation": {
@@ -241,7 +284,11 @@
         "top_left": "Top left",
         "bottom_right": "Bottom right",
         "bottom_left": "Bottom left",
-        "center": "Center"
+        "center": "Center",
+        "top_center": "Top center",
+        "bottom_center": "Bottom center",
+        "center_left": "Center left",
+        "center_right": "Center right"
       }
     },
     "camera_mode": {
@@ -276,6 +323,40 @@
         "slide_right": "Slide in from the right",
         "slide_top": "Slide in from the top",
         "slide_bottom": "Slide in from the bottom"
+      }
+    },
+    "stack": {
+      "options": {
+        "none": "None (overlap)",
+        "vertical": "Vertical",
+        "horizontal": "Horizontal"
+      }
+    },
+    "key": {
+      "options": {
+        "play_pause": "Play/pause",
+        "play": "Play",
+        "pause": "Pause",
+        "stop": "Stop",
+        "next": "Next",
+        "previous": "Previous",
+        "rewind": "Rewind",
+        "fast_forward": "Fast forward",
+        "home": "Home",
+        "back": "Back"
+      }
+    },
+    "install_method": {
+      "options": {
+        "app": "App self-update (default)",
+        "auto": "Auto: app on Android 12+, ADB below",
+        "adb": "ADB install"
+      }
+    },
+    "adb_key": {
+      "options": {
+        "own": "PiPup's own key",
+        "androidtv": "Android TV integration's key"
       }
     }
   },
@@ -324,13 +405,17 @@
           "name": "Web URL",
           "description": "Web page to render (JavaScript and autoplay enabled)."
         },
+        "whep_url": {
+          "name": "WHEP URL",
+          "description": "WebRTC stream played straight from a WHEP endpoint, for example go2rtc's /api/webrtc?src=camera on port 1984. Starts faster and steadier than go2rtc's player page in web_url (app 0.25.0 or newer)."
+        },
         "media_width": {
           "name": "Media width",
           "description": "Media width in pixels (default 640)."
         },
         "media_height": {
           "name": "Media height",
-          "description": "Web view height in pixels (default 360)."
+          "description": "Media height in pixels: the web/WHEP view height (default 360), and for a camera or video popup the box height until the stream reports its own shape, so an anamorphic camera snapshot shows correctly; older apps ignore it."
         },
         "title_color": {
           "name": "Title color",
@@ -355,6 +440,14 @@
         "muted": {
           "name": "Mute audio",
           "description": "Mutes audio in video/web streams. When omitted, the device default applies (integration settings; audio can freeze video on some TVs)."
+        },
+        "media_full_bleed": {
+          "name": "Full-bleed media",
+          "description": "Run the video or image edge to edge across the top of the popup, its top corners rounded with the popup; title, message and buttons keep the padding. Older apps ignore it."
+        },
+        "buttons_inline": {
+          "name": "Inline buttons",
+          "description": "Put the buttons at the end of the title/message row instead of on their own row below it, e.g. a single compact ✕. Older apps ignore it."
         },
         "tts": {
           "name": "Speak text",
@@ -420,9 +513,33 @@
           "name": "Button size",
           "description": "Button text size in sp; padding scales along, so popups with buttons can be small (app 0.19.0 or newer). Omit for the classic look."
         },
+        "button_color": {
+          "name": "Button color",
+          "description": "Fill of an unfocused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic look."
+        },
+        "button_focus_color": {
+          "name": "Button focus color",
+          "description": "Fill of the focused button as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for the classic blue."
+        },
+        "button_text_color": {
+          "name": "Button text color",
+          "description": "Button label color as #RRGGBB or #AARRGGBB; older apps ignore it. Omit for white."
+        },
+        "button_border_color": {
+          "name": "Button border color",
+          "description": "Button outline color, focused and unfocused, as #RRGGBB or #AARRGGBB; older apps ignore it."
+        },
+        "button_corner_radius": {
+          "name": "Button corner radius",
+          "description": "Button corner radius in pixels; 0 gives square corners, a large value a pill. Older apps ignore it."
+        },
         "animation": {
           "name": "Animation",
           "description": "Entrance animation, reversed when the popup expires naturally. An update-in-place of the same popup does not re-animate (app 0.19.0 or newer)."
+        },
+        "stack": {
+          "name": "Stack",
+          "description": "Line up with the other stacking popups at the same position instead of overlapping them: vertical (away from the top or bottom edge) or horizontal (away from the left or right edge). The rest moves up when one closes. Not for center (app 0.27.0 or newer; an older app ignores it)."
         },
         "padding": {
           "name": "Padding",
@@ -430,15 +547,47 @@
         },
         "opacity": {
           "name": "Opacity",
-          "description": "Whole popup opacity, 0 to 1; the TV shows through below 1 (app 0.22.0 or newer, davbebawy fork)."
+          "description": "Whole popup opacity, 0 to 1; the TV shows through below 1 (app 0.24.0 or newer)."
         },
         "transparent": {
           "name": "Transparent page",
-          "description": "web_url only: the page gets no background of its own, so a page with a transparent body shows the TV behind it (app 0.22.0 or newer, davbebawy fork)."
+          "description": "web_url only: the page gets no background of its own, so a page with a transparent body shows the TV behind it (app 0.24.0 or newer)."
         },
         "bring_to_front": {
           "name": "Redraw on top",
-          "description": "Only when a popup with this ID is already on the TV: draw the new one on top of the other popups instead of in its old place (app 0.24.0 or newer, davbebawy fork)."
+          "description": "Only when a popup with this ID is already on the TV: draw the new one on top of the other popups instead of in its old place (app 0.24.0 or newer)."
+        },
+        "live_badge": {
+          "name": "Live badge",
+          "description": "Show a Live pill over a camera or video popup once the stream is playing (never over the still); older apps ignore it."
+        },
+        "live_badge_color": {
+          "name": "Live badge color",
+          "description": "Live pill color as #RRGGBB or #AARRGGBB; default amber."
+        },
+        "live_badge_position": {
+          "name": "Live badge position",
+          "description": "Corner of the video for the Live pill; default bottom right."
+        },
+        "grid": {
+          "name": "Camera wall",
+          "description": "Up to 9 WHEP streams in one popup (app 0.29.0 or newer): a list of WHEP URLs, or of mappings with whep_url, label and poster_url. All from the same server. media_width/media_height size the whole grid."
+        },
+        "grid_columns": {
+          "name": "Grid columns",
+          "description": "Number of columns. Empty = automatic (2 for up to 4 tiles, 3 above)."
+        },
+        "grid_fullscreen": {
+          "name": "Grid full screen",
+          "description": "Fill the screen with the camera wall. Without an explicit position or padding the popup is centred and edge to edge."
+        },
+        "grid_labels": {
+          "name": "Grid labels",
+          "description": "Show each tile's label."
+        },
+        "fullscreen": {
+          "name": "Full screen",
+          "description": "Cover the whole screen, status and navigation bars included, with the popup centred (app 0.29.1 or newer). Matters on devices with system bars (tablets, intercom panels); on a TV it looks the same. For a frameless page give padding 0 and border width 0."
         }
       }
     },
@@ -469,6 +618,34 @@
     "sync": {
       "name": "Sync",
       "description": "Reads the state of the targeted PiPup device(s) now and re-sends the push webhook to the app."
+    },
+    "launch_app": {
+      "name": "Launch app",
+      "description": "Starts an app on the TV, or opens a deep link (app 0.29.0 or newer). A sleeping screen is woken first.",
+      "fields": {
+        "package": {
+          "name": "Package",
+          "description": "Android package name, e.g. com.netflix.ninja. The media player's source list shows the installed apps."
+        },
+        "uri": {
+          "name": "Link",
+          "description": "Deep link to open, e.g. a YouTube URL. With a package as well, only that app opens it."
+        },
+        "wake": {
+          "name": "Wake the screen",
+          "description": "Turn a sleeping screen on first."
+        }
+      }
+    },
+    "send_key": {
+      "name": "Send key",
+      "description": "Sends a media key to the app that is playing, or home/back (those need the accessibility service). App 0.29.0 or newer.",
+      "fields": {
+        "key": {
+          "name": "Key",
+          "description": "The key to send."
+        }
+      }
     }
   },
   "issues": {
@@ -491,6 +668,10 @@
           "not_loaded": "This PiPup device is not loaded right now."
         }
       }
+    },
+    "auto_update_failed": {
+      "title": "Automatic PiPup update on {name} failed",
+      "description": "The automatic update of the PiPup app on {name} failed ({failures}× in a row): {reason}.\n\nIt is retried every night. Fix the cause (see the integration's options, Advanced install), or press Install on the update entity to try now. This message disappears after the next successful update."
     }
   },
   "config_subentries": {

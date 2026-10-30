@@ -15,7 +15,7 @@ from homeassistant.components import webhook as webhook_component
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import issue_registry as ir, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.update_coordinator import (
@@ -35,6 +35,8 @@ from .const import (
     EVENT_PUSH,
     ISSUE_NO_OVERLAY,
     ISSUE_NO_OVERLAY_FIXABLE,
+    PUSH_HEARTBEAT_INTERVAL,
+    UPDATE_POLL_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,7 +51,7 @@ POST_CALL_SETTLE_SECONDS = 0.5
 def popups_on_screen(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Every popup on the TV, in stack order (last = on top).
 
-    App >= 0.24.0 (davbebawy fork) reports the list itself; an older app shows one
+    App >= 0.24.0 reports the list itself; an older app shows one
     popup at a time, reported as `popup` while `visible`.
     """
     data = data or {}
@@ -84,9 +86,12 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             entry.data[CONF_PORT],
         )
         self.online = False
-        # set once the push webhook is registered (app >= 0.23.0); polling stops then
+        # set once the push webhook is registered (app >= 0.24.0); polling stops then
         self._webhook_id: str | None = None
         self._asserting = False
+        # last webhook warning logged; the heartbeat repeats it at debug level
+        self._webhook_warning: str | None = None
+        self._setting_up_push = False
         # update source the entities were built with; a change reloads the entry
         self.applied_update_source: str | None = None
         # event/reason/removedId/replacedId of the last push, read by the overlays
@@ -110,6 +115,18 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=update_interval,
             config_entry=entry,
         )
+        self._normal_interval = update_interval
+        self._sw_version: str | None = None
+
+    def set_update_polling(self, active: bool) -> None:
+        """Poll every UPDATE_POLL_INTERVAL while an app update runs, normally otherwise.
+
+        Called by the update entity on every state change; a no-op when the interval
+        already matches. The new interval applies from the next scheduled refresh.
+        """
+        target = UPDATE_POLL_INTERVAL if active else self._normal_interval
+        if self.update_interval != target:
+            self.update_interval = target
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch /state from the device."""
@@ -125,14 +142,52 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.data
         self.online = True
         self._check_overlay_permission(data)
+        self._sync_sw_version(data)
+        push = data.get("push") or {}
         # The app lost its webhook (reinstall wipes its prefs): set it again.
-        if self._webhook_id and not (data.get("push") or {}).get("webhook"):
+        if self._webhook_id and not push.get("webhook"):
             self.hass.async_create_task(self.async_assert_webhook())
+        # The app gained push after setup (self-update from an app < 0.24.0): set it
+        # up now instead of polling until the next reload. HA starts the task eagerly,
+        # before this data is stored, so the support is passed in explicitly.
+        elif self._webhook_id is None and push.get("supported") and not self._setting_up_push:
+            self._setting_up_push = True
+            self.hass.async_create_task(self._async_setup_push_later())
         return data
+
+    async def _async_setup_push_later(self) -> None:
+        """Set up push for an app that gained it after setup."""
+        try:
+            await self.async_setup_push(supported=True)
+        finally:
+            self._setting_up_push = False
+
+    def _sync_sw_version(self, data: dict[str, Any]) -> None:
+        """Keep the device's sw_version equal to the app version on the TV.
+
+        DeviceInfo only sets it when the entities are created, so after a
+        self-update the device page showed the old version until the next reload.
+        Only touches the registry when the version actually changed.
+        """
+        version = data.get("version")
+        if not version or version == self._sw_version:
+            return
+        from . import _async_get_own_device  # local: __init__ imports this module
+
+        registry = dr.async_get(self.hass)
+        entry = self.config_entry
+        device = _async_get_own_device(
+            registry, (DOMAIN, entry.unique_id or entry.entry_id), entry.entry_id
+        )
+        if device is None:
+            return  # entities not set up yet; DeviceInfo carries the version then
+        if device.sw_version != version:
+            registry.async_update_device(device.id, sw_version=version)
+        self._sw_version = version
 
     @property
     def push_supported(self) -> bool:
-        """True when the app can push its state (davbebawy fork, app >= 0.23.0)."""
+        """True when the app can push its state (app >= 0.24.0)."""
         return bool(((self.data or {}).get("push") or {}).get("supported"))
 
     @property
@@ -140,14 +195,14 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """True when this entry receives pushes and does not poll."""
         return self._webhook_id is not None
 
-    async def async_setup_push(self) -> None:
+    async def async_setup_push(self, supported: bool | None = None) -> None:
         """Register this entry's push webhook and hand its URL to the app.
 
         From then on the coordinator does not poll: the app POSTs its /state JSON on
         every change, and /state is read only at setup, after this integration's own
         calls, and on Sync. An app without push keeps the timed poll.
         """
-        if self._webhook_id is not None or not self.push_supported:
+        if self._webhook_id is not None or not (supported or self.push_supported):
             return
         entry = self.config_entry
         webhook_id = entry.data.get(CONF_PUSH_WEBHOOK_ID)
@@ -169,7 +224,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except ValueError:
             _LOGGER.debug("Push webhook for %s already registered", entry.title)
         self._webhook_id = webhook_id
-        self.update_interval = None
+        # Pushes make every change immediate; a slow heartbeat poll stays so a TV that
+        # sleeps or drops off the network still turns unavailable (a push never says so).
+        self._normal_interval = max(self._normal_interval, PUSH_HEARTBEAT_INTERVAL)
+        if self.update_interval != UPDATE_POLL_INTERVAL:
+            self.update_interval = self._normal_interval
         await self.async_assert_webhook()
 
     @callback
@@ -188,18 +247,29 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             base = get_url(self.hass, allow_external=False, prefer_external=False)
             await self.client.settings(webhook=f"{base}/api/webhook/{self._webhook_id}")
         except NoURLAvailableError:
-            _LOGGER.warning(
-                "PiPup push for %s: HA has no internal URL the TV can reach; "
-                "set one under Settings > System > Network", self.config_entry.title
+            self._warn_webhook(
+                f"PiPup push for {self.config_entry.title}: HA has no internal URL the "
+                "TV can reach; set one under Settings > System > Network"
             )
         except PiPupError as err:
-            _LOGGER.warning("PiPup push for %s: cannot set webhook: %s",
-                            self.config_entry.title, err)
+            self._warn_webhook(
+                f"PiPup push for {self.config_entry.title}: cannot set webhook: {err}"
+            )
+        else:
+            self._webhook_warning = None
         finally:
             self._asserting = False
 
+    def _warn_webhook(self, message: str) -> None:
+        """Log a webhook problem once; the heartbeat's repeats go to debug."""
+        if message == self._webhook_warning:
+            _LOGGER.debug("%s", message)
+            return
+        self._webhook_warning = message
+        _LOGGER.warning("%s", message)
+
     async def async_apply_app_settings(self) -> None:
-        """Send the update source option to the app (app >= 0.23.0), so the TV's own
+        """Send the update source option to the app (app >= 0.24.0), so the TV's own
         release check uses the same source as the update entity, or none at all."""
         if not self.push_supported:
             return  # older app: no updateSource setting
@@ -239,8 +309,15 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         self.online = True
         self._check_overlay_permission(data)
+        self._sync_sw_version(data)
         self.last_event = extra
         self.async_set_updated_data(data)
+        from . import _async_get_own_device  # local: __init__ imports this module
+
+        entry = self.config_entry
+        device = _async_get_own_device(
+            dr.async_get(hass), (DOMAIN, entry.unique_id or entry.entry_id), entry.entry_id
+        )
         hass.bus.async_fire(
             EVENT_PUSH,
             {
@@ -251,7 +328,8 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "popup_ids": popup_ids(data),
                 "removed_id": extra["removedId"],
                 "replaced_id": extra["replacedId"],
-                "device_id": data.get("id"),
+                "device_id": device.id if device else None,
+                "pipup_id": data.get("id"),
                 "device_name": data.get("name"),
             },
         )

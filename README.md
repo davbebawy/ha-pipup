@@ -10,12 +10,18 @@ from Home Assistant — including **showing a camera stream for as long as there
 Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on the TV
 (the original Play Store version lacks the `/state` endpoint and indefinite popups).
 
+> **Contributors:** [David Bebawy (davbebawy)](https://github.com/davbebawy) built push instead of
+> poll, overlays, several popups at once, see-through popups and the update source option (1.22.0);
+> [andrewm1205](https://github.com/andrewm1205) added the top/bottom center positions (1.19.0).
+
 ## Features
 
 - Config flow per TV (host + port) **with automatic mDNS discovery** (app ≥ 0.2.5 advertises
   `_pipup._tcp`); discovered TVs carry a stable device id, so the config entry **follows the TV
   across DHCP address changes** (existing host:port entries migrate automatically on first contact).
-  Each TV becomes a device with:
+  Each TV becomes a device with the entities below. The device hangs under the TV's own device from the
+  Android TV Remote or Android Debug Bridge integration on the same IP (remote preferred); pick another
+  one under *Configure → Parent device (TV)*. Each TV device has:
   - **Popup** binary sensor (on = a popup is visible; attributes: `popup_id`, `duration`, `indefinite`, `elapsed`)
   - **Screen** binary sensor (TV screen on/interactive — requires app ≥ 0.2.3)
   - **Connectivity** binary sensor — FireTV sticks cut their network in standby; entities now stay
@@ -33,6 +39,10 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     PiPup, so this no longer needs a second ADB/CEC integration. Attributes `can_sleep` and
     `sleep_method` say what the device can actually do: turning **on** always works, turning **off**
     needs a one-time adb grant on the TV (see [screen on/off](#screen-onoff))
+  - **TV** media player (app ≥ 0.29.0) — a remote control without adb: the installed apps as
+    **sources** (select one to start it), play/pause/stop/next/previous as media keys to whatever app
+    is playing, volume up/down/mute, a volume slider where the box owns its volume, and on/off through
+    the screen routes. See [TV control](#tv-control)
   - **Permission problem** diagnostic binary sensor (app ≥ 0.7.0) — on when the app misses a
     permission it needs, with each grant as an attribute. Without the overlay app-op the TV accepts
     every popup with HTTP 200 and shows *nothing*, and `adb install -r` resets it, so this also
@@ -49,6 +59,11 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     the app's own permission diagnosis (which activity handles each settings screen, whether it is a
     vendor placeholder, whether a background launch is allowed, how the last attempt ended). That file
     is what to attach to a "the fix button does nothing" report
+- Actions **`pipup.launch_app`** (an app by package, or a deep link) and **`pipup.send_key`** (media
+  keys, home, back) — app ≥ 0.29.0
+- **Camera wall** in `pipup.show` with `grid` (app ≥ 0.29.0): up to nine WHEP streams in one popup, or
+  full screen. See [Camera wall](#camera-wall)
+- **Blueprints** for an info card and an "appliance done" card — see [Blueprints](#blueprints)
 - Action **`pipup.show`** — title/message/media popup with all PiPup fields, plus:
   - `duration: 0` → popup stays until dismissed or replaced
   - `popup_id` → re-sending the same id+content only extends the timer (stream keeps playing, no flicker)
@@ -57,8 +72,16 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     ≥ 0.16.0 `stream` (and any `video_url`, incl. `rtsp://`) renders into a TextureView, so it shows
     **over video the TV is already playing**; on older apps it used a `VideoView` that could freeze or
     black out concurrent playback — update the app rather than avoiding `stream`. HLS runs a few
-    seconds behind live; for a doorbell-style popup a direct `rtsp://` `video_url` is snappier
-  - `position` is optional — omitted means the device's configured default position
+    seconds behind live. **With go2rtc (stand-alone or in Frigate) use `whep_url` + `poster_url`
+    instead** (see below and [Which camera route?](#which-camera-route)): faster and steadier than any
+    `camera_mode`
+  - `position` is optional — omitted means the device's configured default position. Choices:
+    `top_right`, `top_left`, `bottom_right`, `bottom_left`, `center`, `top_center` / `bottom_center`
+    (centered along the top or bottom edge, app ≥ 0.22.0) and `center_left` / `center_right` (centered
+    along the side edge, app ≥ 0.26.0) — the full 3×3 grid. On an app too old for a position the action
+    reports an error for that TV instead of sending a value the app would reject. `top_right`,
+    `center_right` and `bottom_right` stack along one side when several popups (each with its own
+    `popup_id`) are shown at once.
   - `muted: true` **by default** (requires app ≥ 0.2.4) — audio in a popup can freeze video playback
     on some TVs; pass `muted: false` when you do want sound
   - **per-device defaults for everything** — duration, position, muted, media size, colors and text
@@ -92,7 +115,13 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     `border_width: 2` is a thin red border, and `border_width: 0` drops the preset's frame.
     `corner_radius` also works without a border. Sizes are in pixels, and all three are available as
     **per-device defaults** too
-  - `poster_url` → a still image shown over a `video_url`/`web_url` stream the moment the popup opens,
+  - `whep_url` → a WebRTC stream played straight from a WHEP endpoint, e.g. go2rtc
+    `http://<go2rtc>:1984/api/webrtc?src=<camera>` (app ≥ 0.25.0). Same live stream as go2rtc's player
+    page in `web_url`, without loading that page: on a Fire TV it showed the first frame after 2.3 s on
+    average (2.2–2.5) against 3.4 s (2.0–6.6) for the page. `muted` defaults to true, and
+    `poster_url` / `transparent` work as for `web_url`. An older app gets an error from the action
+    instead of a failing popup
+  - `poster_url` → a still image shown over a `video_url`/`web_url`/`whep_url` stream the moment the popup opens,
     faded out on the stream's first frame (app ≥ 0.17.0) — so a live popup never opens as an empty box
     while RTSP connects or the WebView starts. **`camera_entity` popups get this automatically**
     (`mjpeg` and `stream` modes): a signed snapshot of the same camera is sent as poster
@@ -102,11 +131,46 @@ Requires the [PiPup fork APK](https://github.com/mhoogenbosch/PiPup/releases) on
     `http://homeassistant.local:8123/local/icons/…` path works
 - Action **`pipup.dismiss`**: remove the popup with a given `popup_id`, else the popup shown
   without an id; `all: true` removes every popup. The **Dismiss popup** button removes every popup.
-- **Several popups at once** (app >= 0.24.0, davbebawy fork): each `popup_id` is its own popup on
+
+  > **Upgrading from ha-pipup ≤ 1.21 / app ≤ 0.23:** a `pipup.dismiss` *without* `popup_id` used to
+  > remove whatever was on screen. Since 1.22.0 / app 0.24.0 it only removes a popup that was shown
+  > **without** an id — a popup shown with `popup_id` stays up, and nothing reports an error (the app
+  > answers `200 no popup without an id`). Indefinite camera popups (`duration: 0`) then never go away.
+  > Pass the same `popup_id` as in `pipup.show`, or `all: true` to clear the TV.
+- **Several popups at once** (app >= 0.24.0): each `popup_id` is its own popup on
   the TV, so a doorbell popup opens beside an overlay instead of replacing it. Popups without an id
   share one slot. `bring_to_front` in `pipup.show` redraws a popup that is already up on top of the
   others. The **Current popup** sensor shows the one on top, with every id in its `popups`
   attribute; **Popups on screen** counts them.
+- **Stacking** (app >= 0.27.0): `stack: vertical` or `stack: horizontal` in `pipup.show` lines a
+  popup up with the other stacking popups at the same position, so two camera popups on the right
+  edge sit one above the other instead of on top of each other. The rest move up when one closes.
+  Set a per-TV default under *Configure* (*Default stacking*); `stack: none` overrides it for one
+  call. An older app ignores the field and the popups overlap as before.
+- **Camera popup look and button style** (app >= 0.28.0, contributed by @pelkiegr):
+  `live_badge` (+ `live_badge_color`, `live_badge_position`) shows a "Live" pill once the stream plays,
+  `media_full_bleed` runs the media edge to edge, and `buttons_inline` puts the buttons beside the text.
+  `button_color`, `button_focus_color`, `button_text_color`, `button_border_color` and
+  `button_corner_radius` restyle the buttons. A per-call `media_height` now also fixes a video popup's
+  box until the first frame (the per-TV default is deliberately not sent for video). Everything is sent
+  only when set; an older app ignores it.
+- **Push instead of poll** (app >= 0.24.0): at setup every TV gets its own local-only webhook, and
+  the app POSTs its state there on every change. Popup, screen and overlay entities follow within
+  milliseconds instead of at the next 15 s poll. A 60 s heartbeat poll remains, because a TV that
+  falls asleep or drops off the network cannot push that. Each push also fires a **`pipup_event`**
+  event: `event` (`popup_shown`, `popup_replaced`, `popup_removed`, `started`, `screen_on`,
+  `screen_off`, `permissions`, `settings`), `reason` (for a removal: `expired`, `cancelled`,
+  `button`, `back`, `watchdog`), `popup_id`, `shown_id`, `removed_id`, `replaced_id`, `popup_ids`,
+  `device_id` (the HA device), `pipup_id` and `device_name`. An older app keeps the timed poll.
+  The push needs an internal Home Assistant URL the TV can reach (Settings → System → Network).
+- **Sync** button and action **`pipup.sync`**: read the TV's state now and send the webhook again
+  (after a reinstall of the app, for example; the integration also does this by itself when the
+  app reports it has no webhook).
+- `pipup.show` fields **`opacity`** (0..1, the whole popup) and **`transparent`** (`web_url` only:
+  a page with `html, body { background: transparent }` floats over the TV picture) (app >= 0.24.0).
+- Option **App update source**: `github:owner/repo` (default `github:mhoogenbosch/PiPup`), a folder
+  URL with `releases.json` and the APKs (a LAN mirror for TVs without internet), or `off`. The app on
+  the TV gets the same setting, so its own twice-daily check agrees; `off` also drops the update entity.
 - Action **`pipup.fix_permission`** (app ≥ 0.8.0) — put a permission screen on the TV: the app's own
   overview, the first missing permission, or a specific one. Neither HA nor the app can *grant* these
   (they are app-ops, i.e. shell/system territory), but walking someone to the exact screen beats
@@ -178,10 +242,149 @@ Because the app derives the screen state from `PowerManager.isInteractive`, whic
 a fresh wake, the switch trusts its own last command for up to 20 seconds and schedules an extra
 refresh — so it does not visibly bounce back after you flip it.
 
-## Overlays (davbebawy fork)
+### TV control
+
+With app ≥ 0.29.0 every TV gets a **media player** entity and two actions. Nothing to grant: it uses
+the same "display over other apps" permission popups already need.
+
+| | How |
+|---|---|
+| Start an app | `media_player.select_source` with the app's name (the source list is the installed TV apps), or `pipup.launch_app` with `package` |
+| Open a link | `pipup.launch_app` with `uri` (and optionally `package` to force the app) |
+| Play/pause, next, … | the media player's transport buttons, or `pipup.send_key` |
+| Home / back | `pipup.send_key` — needs the accessibility service on the TV (`install.sh --accessibility`) |
+| Volume | the media player's volume slider, up/down and mute |
+| On / off | the media player's power button (off needs the screen-off route, as for the Screen switch) |
+
+```yaml
+- action: pipup.launch_app
+  target:
+    entity_id: media_player.pipup_living_room
+  data:
+    uri: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+- action: pipup.send_key
+  target:
+    entity_id: media_player.pipup_living_room
+  data:
+    key: play_pause
+```
+
+What it cannot do: PiPup does not see which app is in front or what is playing (that needs usage
+access, a grant a TV has no screen for). The media player's state is therefore the screen (on/off),
+its **source** is only the app PiPup itself started last, and **play/pause** sends the toggle key
+because PiPup does not know which of the two applies. On a box whose volume belongs to the TV set or
+amplifier over HDMI-CEC (`volume_fixed: true`) the slider is hidden; up/down and mute are passed on.
+
+## Camera wall
+
+`grid` (app ≥ 0.29.0) puts up to nine WHEP streams in one popup. Each tile is a WHEP URL, or a
+mapping with `whep_url`, `label` and `poster_url`. `media_width`/`media_height` size the whole grid
+(default 1280×720); `grid_fullscreen: true` fills the screen, centred and edge to edge unless you give
+a `position` or `padding` yourself. `grid_columns` overrides the automatic layout (2 columns up to four
+tiles, 3 above) and `grid_labels: false` hides the captions.
+
+`fullscreen: true` (app ≥ 0.29.1) works on any popup: the window covers the whole screen, status and
+navigation bars included, with the popup centred. On a TV that looks the same as before; on a device
+with system bars (a tablet, an intercom panel) it is what lets a screen-sized page reach the edges.
+`grid_fullscreen` sets it for you.
+
+```yaml
+- action: pipup.show
+  target:
+    entity_id: binary_sensor.pipup_living_room_popup
+  data:
+    popup_id: camera_wall
+    duration: 120
+    grid_fullscreen: true
+    grid:
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=doorbell
+        label: Front door
+        poster_url: http://192.168.1.20:5000/api/doorbell/latest.jpg
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=driveway
+        label: Driveway
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=garden
+        label: Garden
+      - whep_url: http://192.168.1.20:1984/api/webrtc?src=shed
+        label: Shed
+```
+
+All tiles must come from the same go2rtc as the first one (go2rtc sends no CORS headers by default).
+Every tile is decoded on the TV, so on a small stick use the cameras' substreams. Close the wall with
+`pipup.dismiss` and the same `popup_id`.
+
+## Blueprints
+
+Two blueprints ship with the integration. Import them with the buttons, or paste the URL under
+*Settings → Automations & scenes → Blueprints → Import blueprint*.
+
+### Info card on the TV (script)
+
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmhoogenbosch%2Fha-pipup%2Fblob%2Fmain%2Fblueprints%2Fscript%2Fpipup_info_card.yaml)
+
+One script with the look of your info cards set once — TVs, position, default duration, stacking,
+chime, countdown bar. Call it with just the text that changes: `title`, `message`, and optionally
+`icon` (a full image URL), `urgency` (info/warning/critical), `duration` and `card_id` (the same id
+replaces a card that is still up instead of adding a second one). The examples below call it as
+`script.tv_info_card`.
+
+The weather when someone turns on the TV:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: switch.pipup_living_room_screen
+    to: "on"
+actions:
+  - action: script.tv_info_card
+    data:
+      card_id: weather
+      title: Weather
+      message: >-
+        {{ state_attr('weather.home', 'temperature') }} °C,
+        {{ states('weather.home') | replace('-', ' ') }}
+```
+
+Today's calendar in the morning:
+
+```yaml
+triggers:
+  - trigger: time
+    at: "07:30:00"
+actions:
+  - action: calendar.get_events
+    target:
+      entity_id: calendar.family
+    data:
+      duration: {hours: 16}
+    response_variable: agenda
+  - if: "{{ agenda['calendar.family'].events | count > 0 }}"
+    then:
+      - action: script.tv_info_card
+        data:
+          card_id: agenda
+          title: Today
+          duration: 45
+          message: >-
+            {% for e in agenda['calendar.family'].events %}
+            {{ as_timestamp(e.start) | timestamp_custom('%H:%M') if 'T' in e.start else 'All day' }}
+            · {{ e.summary }}
+            {% endfor %}
+```
+
+### Appliance done (automation)
+
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmhoogenbosch%2Fha-pipup%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpipup_appliance_done.yaml)
+
+A card on the TVs when the washing machine, dryer or dishwasher has finished, from its power meter:
+above *Running above* (default 10 W) for a couple of minutes marks it as running, then below *Done
+below* (3 W) for *Done after* (5 min) shows the card. Give it a toggle helper (`input_boolean`) of its
+own: that remembers "running" across a Home Assistant restart, and a 5-minute check catches a finish
+whose quiet period was interrupted by one. Optional: only show the card when a TV screen is on.
+
+## Overlays
 
 An overlay is a web page pinned over the TV picture, switched from a dashboard. A TV can have
-several (a fantasy column, a score strip).
+several (an agenda column, a score strip).
 
 1. **Configure** the TV entry and fill **Overlay pages**, one line each: `Name | URL`.
 2. **Add overlay** on the integration page and give it a name. Its popup id is the name as a slug,
@@ -196,6 +399,30 @@ popups with **Redraw on top** on.
 
 A see-through page needs `html, body { background: transparent }` and the **Transparent** switch
 on; **Page opacity** fades the whole popup instead.
+
+## Which camera route?
+
+For live camera popups (doorbell, motion) the recommendation is **`whep_url` + `poster_url`**
+(app ≥ 0.25.0), with go2rtc as the source:
+
+```yaml
+whep_url: "http://<go2rtc>:1984/api/webrtc?src=<camera>"
+poster_url: "http://<frigate>:5000/api/<camera>/latest.jpg"   # still on screen at once
+```
+
+Measured on a Fire TV, first live frame: `whep_url` 2.3–2.5 s on average, go2rtc's player page in
+`web_url` 3.4–6.4 s, Frigate MJPEG (`web_url` → `/api/<camera>?fps=5`) 0.9 s. MJPEG starts fastest but
+runs at detect fps and 2–3 s behind reality; WHEP is full frame rate and under a second behind. With
+the poster the popup shows a picture at once either way. `camera_entity` (no go2rtc needed) is the
+fallback. Full table and the reasoning: the
+[app README](https://github.com/mhoogenbosch/PiPup#which-stream-should-a-camera-popup-use).
+
+**Poster shows, video never comes, on one TV only?** Some Android TV boxes (a Nokia 8010 here) have a
+256 KB UDP receive buffer, and WebRTC delivers each keyframe as one burst. Keyframes above ~220 KB
+(a 5–6 Mbit/s main stream at 1 s keyframe interval) then never decode on that box, while a Fire TV
+plays them fine. Lower the camera's main-stream bitrate until its keyframes fit, or point that TV at
+the sub-stream; how to measure is in the
+[app README](https://github.com/mhoogenbosch/PiPup#keep-the-cameras-keyframes-under-the-tvs-udp-buffer).
 
 ## Examples
 
@@ -274,7 +501,8 @@ both the button id *and* the device id — only the intended TV can open the doo
     duration: 45                 # finite: never leave an undismissable popup
     title: Front door
     tts: "Someone is at the door"
-    web_url: "http://go2rtc.local:1984/stream.html?src=doorbell&mode=webrtc"
+    whep_url: "http://go2rtc.local:1984/api/webrtc?src=doorbell"    # app >= 0.25.0
+    poster_url: "http://frigate.local:5000/api/doorbell/latest.jpg"
     media_width: 720
     media_height: 540
     buttons:
@@ -334,7 +562,9 @@ triggers:
     id: motion_off
 actions:
   - choose:
-      - conditions: "{{ trigger.id == 'motion_on' }}"
+      - conditions:
+          - condition: trigger
+            id: motion_on
         sequence:
           - action: pipup.show
             target:
@@ -344,18 +574,128 @@ actions:
               duration: 0            # until dismissed
               popup_id: driveway
               camera_entity: camera.driveway   # camera_mode defaults to mjpeg (safe next to live TV)
-      - conditions: "{{ trigger.id == 'motion_off' }}"
+              # with go2rtc, faster and smoother (app >= 0.25.0), instead of camera_entity:
+              # whep_url: "http://go2rtc.local:1984/api/webrtc?src=driveway"
+              # poster_url: "http://frigate.local:5000/api/driveway/latest.jpg"
+      - conditions:
+          - condition: trigger
+            id: motion_off
         sequence:
           - action: pipup.dismiss
             target:
               entity_id: binary_sensor.pipup_living_room_popup
             data:
-              popup_id: driveway     # never cancels an unrelated popup
+              popup_id: driveway     # required: without it only a popup *without* id is removed
 ```
 
 When you show indefinite (`duration: 0`) popups, make the automation `mode: queued` and put
 `continue_on_error: true` on the pipup actions — with the default `mode: single` a dismiss that
 fires while a show is still running is silently dropped, leaving the popup on screen.
+
+### Doorbell: pause the TV and show the camera wall (app ≥ 0.29.0)
+
+Whoever is watching gets the picture of every outside camera at once, and the film waits. The wall
+closes by itself after two minutes (`duration`), so a restart or a missed second trigger cannot leave
+it on screen.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.doorbell_pressed
+    to: "on"
+    not_from: [unavailable, unknown]
+actions:
+  # pause, not play/pause: running this twice must not resume playback
+  - action: media_player.media_pause
+    continue_on_error: true
+    target:
+      entity_id: media_player.pipup_living_room
+  - action: pipup.show
+    continue_on_error: true
+    target:
+      entity_id: binary_sensor.pipup_living_room_popup
+    data:
+      popup_id: doorbell_wall
+      duration: 120
+      grid_fullscreen: true
+      grid:
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=doorbell
+          label: Front door
+          poster_url: http://frigate.local:5000/api/doorbell/latest.jpg
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=driveway
+          label: Driveway
+          poster_url: http://frigate.local:5000/api/driveway/latest.jpg
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=garden
+          label: Garden
+        - whep_url: http://go2rtc.local:1984/api/webrtc?src=side
+          label: Side path
+mode: single   # a second press within the same run adds nothing
+```
+
+The media key reaches the app that holds the media session; an app without one (some live-TV
+apps) keeps playing. Point the tiles at substreams on a small streaming stick.
+
+### Dashboard button: YouTube on the living-room TV at a fixed volume (app ≥ 0.29.0)
+
+A script, so a dashboard button (`tap_action: perform-action`) or a voice command can call it. Starting
+the app wakes a sleeping screen first.
+
+```yaml
+script:
+  living_room_youtube:
+    alias: YouTube on the living-room TV
+    mode: single
+    sequence:
+      - action: media_player.select_source
+        target:
+          entity_id: media_player.pipup_living_room
+        data:
+          source: YouTube          # the app's name as in the media player's source list
+      - action: media_player.volume_set
+        target:
+          entity_id: media_player.pipup_living_room
+        data:
+          volume_level: 0.3
+```
+
+For a specific video or playlist use `pipup.launch_app` with `uri:
+https://www.youtube.com/watch?v=…` instead of `select_source`. On a box whose volume belongs to the TV
+set (HDMI-CEC, `volume_fixed: true`) `volume_set` is not offered; use `volume_down`/`volume_up` there.
+
+### Bedtime: pause the kids' TV with a card (app ≥ 0.29.0)
+
+At 21:00 on school nights whatever plays on the kids' TV is paused, with a card that says why. It
+only acts when the TV is actually on, and uses the [info card blueprint](#info-card-on-the-tv-script)
+for the card.
+
+```yaml
+triggers:
+  - trigger: time
+    at: "21:00:00"
+conditions:
+  - condition: time
+    weekday: [sun, mon, tue, wed, thu]
+  - condition: state
+    entity_id: media_player.pipup_kids_room
+    state: "on"
+actions:
+  - action: media_player.media_pause
+    target:
+      entity_id: media_player.pipup_kids_room
+  - action: script.tv_info_card
+    data:
+      card_id: bedtime
+      title: Bedtime
+      message: Time to brush your teeth. Sleep well!
+      urgency: info
+      duration: 60
+mode: single
+```
+
+The media player only reports the screen, not whether something is playing, so `media_pause` on a
+TV that is just showing its home screen does nothing — which is fine here. If a time trigger can be
+missed (Home Assistant restarting at 21:00), add a `homeassistant: start` trigger with a time
+condition between 21:00 and 21:15.
 
 ## Device notes: TCL Google TV needs a keep-alive automation
 
@@ -444,6 +784,58 @@ attribute is `true` for exactly these devices.
 
 **Fully hands-off updates on Android < 12** are possible over ADB, because a **shell-initiated**
 `adb install -r` has no on-screen confirmation on any Android version (only *app*-initiated installs do).
+
+#### Built in: Advanced install (1.29.0)
+
+The integration can do that ADB install itself, in pure Python, so it also works on Home Assistant OS
+(no `adb` binary needed). Per TV, open the integration's options (the gear icon) and expand
+**Advanced install**:
+
+| Field | Values | Default |
+|---|---|---|
+| Install method | **App self-update** (as before) / **Auto** (app on Android 12+, ADB below) / **ADB** | App self-update |
+| ADB port | the TV's network-debugging port | 5555 |
+| ADB key | **PiPup's own key** (`.storage/pipup_adbkey`, created on first use) / **the Android TV integration's key** (`.storage/androidtv_adbkey`) | own |
+
+Turn on **network debugging (ADB)** in the TV's developer options first. Choosing Auto or ADB tests the
+connection when you save. With a key the TV does not know yet, the TV shows *Allow debugging from this
+computer?* and the options ask you to tick **Always allow** and press OK. A TV that already trusts the
+Android TV integration needs nothing: pick that integration's key.
+
+After that, **Install** on the update entity installs over ADB: the latest release's APK is downloaded
+(and checked against the release's sha256), pushed to the TV, installed with `pm install -r`, and
+the app-ops a reinstall resets are granted again (overlay, install, `android:auto_start` on TCL, the
+accessibility service if it was on). The app's service is started in the background; only if it does not
+come back (TCL's vendor guard) is the app opened briefly, and the TV goes back to sleep if it was
+asleep. It never uninstalls the app (that would lose its device id): a build with another signature is
+reported instead. The update entity's `install_method` attribute shows `app` or `adb`, and
+`requires_remote` is `false` with ADB.
+
+#### Automatic updates (1.30.0)
+
+In the same section, **Automatic updates** installs each new release by itself inside a **quiet window**
+(default 03:00–05:00 local time; a window may cross midnight):
+
+- one TV at a time, and only when the TV is reachable and no popup is on screen;
+- one attempt per night: a failure is retried the next night, not every few minutes;
+- on a TV that is on, the app is never opened. The install itself never interrupts what is playing
+  (only PiPup restarts); if the app does not come back by itself, it starts the next time the TV is
+  switched on;
+- the app's own update is used only where it is silent (Android 12+); a TV on Android < 12 needs the
+  install method Auto or ADB, and the options say so;
+- a skipped version (**Skip** on the update entity) is not installed.
+
+A success only writes a logbook entry such as *PiPup app updated 0.29.2 → 0.30.0 (ADB)*. A failure
+is logged and counted; a repair appears after three failed nights, or at once when something on the TV
+needs fixing (debugging not allowed, a build with another signature, a key that cannot be read). It
+disappears after the next successful update. The update entity shows `auto_update`,
+`last_auto_update` (time, result, versions, method) and `auto_update_failures`.
+
+Network debugging gives shell access to anyone on the LAN who is allowed by the TV, so it is opt-in and
+off by default; the integration does nothing beyond what `install.sh` does.
+
+#### Alternative: install.sh
+
 The `install.sh` shipped with each [app release](https://github.com/mhoogenbosch/PiPup/releases) does the
 whole thing — download the latest APK, `adb install -r`, re-grant the two app-ops that every reinstall
 resets, and start the service. Call it from Home Assistant with a `shell_command`:
@@ -497,7 +889,9 @@ segment**. See the [app's Security section](https://github.com/mhoogenbosch/PiPu
 Button presses arrive over a local-only webhook. To stop a device on the LAN from forging a
 `pipup_button` event (which could drive a security-sensitive automation such as a door lock), this
 integration mints a **single-use token** for every button popup, passes it in the callback URL, and
-rejects any callback whose token is missing, unknown or expired. Traffic to the TV is plain HTTP, so
+rejects any callback whose token is missing, unknown or expired. The token is bound to the popup it
+was issued for: the event's `popup_id`, `label`, `device_id` and `device_name` come from what HA
+showed, and a `button` that was not on that popup is rejected. Traffic to the TV is plain HTTP, so
 the token can still be sniffed within its short window on an untrusted network — another reason to
 keep these devices on a segment you control.
 
@@ -530,6 +924,10 @@ keep these devices on a segment you control.
 
 Remove the device via Settings → Devices & Services; re-adding it restores everything
 (no state is stored on the TV).
+
+## License
+
+[MIT](LICENSE).
 
 ## Changelog
 

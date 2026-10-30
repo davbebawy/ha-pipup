@@ -31,13 +31,15 @@ async def async_setup_entry(
     coordinator: PiPupCoordinator = entry.runtime_data
     entities: list[CoordinatorEntity] = [PiPupCurrentPopupSensor(coordinator, entry)]
     # Fields below need the fork app >= 0.2.3; add only when the app reports them.
-    # davbebawy fork app >= 0.24.0: several popups at once
+    # app >= 0.24.0: several popups at once
     if "popups" in coordinator.data:
         entities.append(PiPupPopupsOnScreenSensor(coordinator, entry))
     if "popupsShown" in coordinator.data:
         entities.append(PiPupPopupsShownSensor(coordinator, entry))
     if "uptime" in coordinator.data:
         entities.append(PiPupUptimeSensor(coordinator, entry))
+    if "version" in coordinator.data:
+        entities.append(PiPupAppVersionSensor(coordinator, entry))
     async_add_entities(entities)
     async_add_overlay_sensors(coordinator.overlays, async_add_entities)
 
@@ -143,3 +145,23 @@ class PiPupUptimeSensor(PiPupEntity, SensorEntity):
     def native_value(self) -> int | None:
         """Return the uptime in seconds."""
         return self.coordinator.data.get("uptime")
+
+
+class PiPupAppVersionSensor(PiPupEntity, SensorEntity):
+    """Version of the PiPup app running on the TV (diagnostic).
+
+    The update entity has it as an attribute and the device page as sw_version, but
+    neither is usable in a template, a condition or a dashboard column as directly.
+    """
+
+    _attr_translation_key = "app_version"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: PiPupCoordinator, entry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, entry, "app_version")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the app version reported by the TV."""
+        return self.coordinator.data.get("version")

@@ -5,26 +5,49 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 
 import aiohttp
-from awesomeversion import AwesomeVersion
+from awesomeversion import AwesomeVersion, AwesomeVersionException
 
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
-from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_ON
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 
+from .adb import (
+    REASONS,
+    AdbError,
+    PiPupAdb,
+    async_download_apk,
+    effective_method,
+    forget_apk,
+    requires_remote,
+    release_apk,
+)
 from .api import PiPupError
+from .auto_update import parse_time, window_start
 from .const import (
+    AUTO_UPDATE_MAX_FAILURES,
+    CONF_AUTO_UPDATE,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
     CONF_UPDATE_SOURCE,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_START,
     DEFAULT_UPDATE_SOURCE,
     DOMAIN,
+    INSTALL_METHOD_ADB,
+    ISSUE_AUTO_UPDATE_FAILED,
     UPDATE_SOURCE_OFF,
 )
 from .coordinator import PiPupCoordinator
@@ -56,10 +79,35 @@ SCAN_INTERVAL = timedelta(hours=1)
 # cache it process-wide so N TVs make one GitHub call per interval, not N.
 _CACHE_KEY = "latest_release_cache"
 _CACHE_TTL = timedelta(hours=6)
+# A failed fetch (rate limit, no internet) is remembered too, briefly, so every
+# entity's poll does not hit the source again right away.
+_FAILURE_TTL = timedelta(minutes=15)
+# one fetch per source at a time: N TVs starting together make one call, not N
+_LOCK_KEY = "latest_release_locks"
 # How long the entity keeps reporting progress after our own install request when the
 # device has not confirmed the new version yet. Matches the app's abandoned-install
 # deadline; on Android < 12 this window is where someone confirms on the TV.
 INSTALL_PROGRESS_DEADLINE = timedelta(minutes=15)
+# ADB install: the key is expected to be authorised already (the options flow did
+# that), so no long wait for a prompt nobody is looking at
+ADB_AUTH_TIMEOUT = 5.0
+# after `pm install` the old process is gone; any answer on /state is the new app
+ADB_APP_BACK_TIMEOUT = 30.0
+ADB_APP_BACK_POLL = 2.0
+# Automatic updates: how often each TV checks whether it is its turn. Short enough
+# that a TV which comes online inside the window is still reached that night.
+AUTO_TICK = timedelta(minutes=10)
+# one TV at a time, across all entries: the lock covers an ADB install, the set the
+# app's own updates that run on after the request (entity ids)
+_AUTO_LOCK_KEY = "auto_update_lock"
+_AUTO_RUNNING_KEY = "auto_update_running"
+# failures the user has to fix on the TV (or in the options): a repair right away
+_USER_FIXABLE = {
+    "not_authorized",
+    "signature_mismatch",
+    "no_androidtv_key",
+    "key_unreadable",
+}
 
 
 async def _latest_release_tag(
@@ -70,12 +118,27 @@ async def _latest_release_tag(
     `force` bypasses the cache — used when a device reports a version the cache
     does not know yet, which can only mean the cached value is out of date.
     """
-    caches = hass.data.setdefault(DOMAIN, {}).setdefault(_CACHE_KEY, {})
-    cache = caches.get(source)
-    now = dt_util.utcnow()
-    if cache and not force and cache["expires"] > now:
-        return cache["tag"]
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    caches = domain_data.setdefault(_CACHE_KEY, {})
+    lock = domain_data.setdefault(_LOCK_KEY, {}).setdefault(source, asyncio.Lock())
+    async with lock:
+        # checked under the lock: whoever held it may just have filled the cache
+        cache = caches.get(source)
+        now = dt_util.utcnow()
+        if cache and not force and cache["expires"] > now:
+            return cache["tag"]
+        return await _fetch_release_tag(hass, source, caches, cache, now)
 
+
+async def _fetch_release_tag(
+    hass: HomeAssistant,
+    source: str,
+    caches: dict,
+    cache: dict | None,
+    now,
+) -> str | None:
+    """Fetch the tag from the source and cache it; keep the known tag on failure."""
+    known = cache["tag"] if cache else None
     session = async_get_clientsession(hass)
     try:
         async with session.get(
@@ -83,11 +146,13 @@ async def _latest_release_tag(
         ) as resp:
             if resp.status != 200:
                 _LOGGER.debug("GitHub releases returned %s", resp.status)
-                return cache["tag"] if cache else None
+                caches[source] = {"tag": known, "expires": now + _FAILURE_TTL}
+                return known
             data = await resp.json()
     except (aiohttp.ClientError, TimeoutError) as err:
         _LOGGER.debug("Could not fetch latest PiPup release: %s", err)
-        return cache["tag"] if cache else None
+        caches[source] = {"tag": known, "expires": now + _FAILURE_TTL}
+        return known
 
     if isinstance(data, list):
         # a folder's releases.json is the list: same pick as the app (first release
@@ -96,8 +161,19 @@ async def _latest_release_tag(
             (r for r in data if not r.get("draft") and not r.get("prerelease")), {}
         )
     tag = (data.get("tag_name") or "").lstrip("v") or None
-    caches[source] = {"tag": tag, "expires": now + _CACHE_TTL}
+    # the whole release too: the ADB install needs its APK asset and digest
+    caches[source] = {"tag": tag, "release": data, "expires": now + _CACHE_TTL}
     return tag
+
+
+async def _latest_release(hass: HomeAssistant, source: str) -> dict | None:
+    """The cached release behind the latest tag, fetched when not cached."""
+    await _latest_release_tag(hass, source)
+    cache = hass.data[DOMAIN][_CACHE_KEY].get(source) or {}
+    if not cache.get("release"):
+        await _latest_release_tag(hass, source, force=True)
+        cache = hass.data[DOMAIN][_CACHE_KEY].get(source) or {}
+    return cache.get("release")
 
 
 async def async_setup_entry(
@@ -132,7 +208,50 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         self._attr_release_url = _source_urls(source)[1]
         self._latest: str | None = None
         self._install_requested_at = None
+        # the version the TV ran when Install was pressed: any other version = landed
+        self._version_at_install: str | None = None
+        # automatic updates: the last attempt (restored over restarts) and how many
+        # nights in a row failed; `_auto_pending` = the app's own update requested by
+        # an automatic run, waiting for the new version to show up
+        self._last_auto: dict | None = None
+        self._auto_failures = 0
+        self._auto_pending = False
+        # when the pending app-route run was requested (closes it even if the app
+        # keeps reporting `installing`)
+        self._auto_requested_at = None
 
+    async def async_added_to_hass(self) -> None:
+        """Restore the automatic-update record and start the nightly check."""
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            record = last.attributes.get("last_auto_update")
+            if isinstance(record, dict):
+                self._last_auto = dict(record)
+            failures = last.attributes.get("auto_update_failures")
+            if isinstance(failures, int):
+                self._auto_failures = failures
+            # restarted while the app's own update ran: pick that run up again, so
+            # it still ends in a logbook entry (or a counted failure)
+            if self._last_auto and self._last_auto.get("result") == "requested":
+                requested = dt_util.parse_datetime(str(self._last_auto.get("time") or ""))
+                if requested is not None:
+                    self._auto_requested_at = dt_util.as_utc(requested)
+                    self._install_requested_at = self._auto_requested_at
+                    self._version_at_install = self._last_auto.get("from")
+                    self._set_auto_pending(True)
+        self.async_on_remove(
+            async_track_time_interval(self.hass, self._async_auto_tick, AUTO_TICK)
+        )
+        self.async_on_remove(lambda: self._set_auto_pending(False))
+
+    def _set_auto_pending(self, pending: bool) -> None:
+        """Mark this TV's app-route run as running, for the one-TV-at-a-time rule."""
+        self._auto_pending = pending
+        running = self.hass.data.setdefault(DOMAIN, {}).setdefault(_AUTO_RUNNING_KEY, set())
+        if pending:
+            running.add(self.entity_id)
+        else:
+            running.discard(self.entity_id)
     @property
     def should_poll(self) -> bool:
         """Poll, unlike the other entities on this coordinator.
@@ -159,9 +278,17 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
 
     @property
     def supported_features(self) -> UpdateEntityFeature:
-        """Offer Install only when the app can update itself (>= 0.6.0)."""
+        """Offer Install only when the app can update itself (>= 0.6.0).
+
+        PROGRESS has to come with it: Home Assistant only reads `in_progress` from
+        an entity that declares PROGRESS. Without it, it shows its own flag, which
+        is only set while `async_install` runs - and that returns as soon as the TV
+        has accepted the request. Up to 1.19.0 the Install button therefore came
+        back after a few seconds while the TV was still downloading, and a second
+        press failed with "an update is already running".
+        """
         if "update" in self.coordinator.data:
-            return UpdateEntityFeature.INSTALL
+            return UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
         return UpdateEntityFeature(0)
 
     @property
@@ -183,10 +310,62 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
             self._install_requested_at = None
             return False
         installed = self.installed_version
-        if installed and self._latest and installed == self._latest:
+        if installed and (
+            (self._latest and installed == self._latest)
+            # also without a known latest tag (source unreachable, rate limited):
+            # the TV now runs another version than when Install was pressed
+            or installed != self._version_at_install
+        ):
             self._install_requested_at = None  # it landed
             return False
         return True
+
+    @property
+    def update_percentage(self) -> int | None:
+        """Download progress reported by the app (>= 0.23.0) while it downloads.
+
+        None in every other phase (installing, waiting for the remote press) and on
+        older apps: Home Assistant then shows an indeterminate progress indicator.
+        """
+        if not self.coordinator.online:
+            # The app restarts itself to finish the install. The coordinator then
+            # returns its previous data instead of failing (so last_update_success
+            # stays true - 1.20.0 checked that and never caught this), which would
+            # freeze the bar at the last percentage it saw.
+            return None
+        progress = (self.coordinator.data.get("update") or {}).get("progress")
+        if isinstance(progress, int) and not isinstance(progress, bool):
+            return max(0, min(100, progress))
+        return None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Poll fast while an update runs, so the percentage moves; normal otherwise.
+
+        Also closes an automatic run of the app's own update: it is a success once
+        the version changed, a failure when the progress window ran out without.
+        """
+        in_progress = self.in_progress
+        overdue = (
+            self._auto_requested_at is not None
+            and dt_util.utcnow() - self._auto_requested_at > INSTALL_PROGRESS_DEADLINE
+        )
+        if self._auto_pending and (not in_progress or overdue):
+            # overdue: the app may keep reporting `installing`; the run ends anyway
+            self._set_auto_pending(False)
+            self._auto_requested_at = None
+            before = self._version_at_install
+            if self.installed_version != before:
+                self._auto_result("success", before, "app")
+            else:
+                error = (self.coordinator.data.get("update") or {}).get("error")
+                self._auto_result("app_update_not_landed", before, "app", error or "")
+        elif self._auto_failures and self._up_to_date():
+            # updated another way (Install pressed, the app's own check): the
+            # failed nights no longer matter
+            self._clear_auto_failures()
+        self.coordinator.set_update_polling(in_progress)
+        super()._handle_coordinator_update()
 
     @property
     def extra_state_attributes(self) -> dict[str, str | bool | None]:
@@ -201,24 +380,40 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         the app wakes the TV and shows a popup with an Install button (app >= 0.12.1).
         """
         update = self.coordinator.data.get("update") or {}
-        device = self.coordinator.data.get("device") or {}
         permissions = self.coordinator.data.get("permissions") or {}
-        # `silent` is authoritative (app >= 0.12.1: false on Android < 12, where an
-        # install cannot complete without a remote press); fall back to the OS version
-        # for older apps that do not report it.
-        silent = update.get("silent")
-        if silent is not None:
-            requires_remote = not silent
-        else:
-            android = str(device.get("android") or "")
-            major = int(android.split(".")[0]) if android.split(".")[0].isdigit() else None
-            requires_remote = major is not None and major < 12
+        requires_remote = self._requires_remote()
+        method = effective_method(
+            self.coordinator.config_entry.options, self.coordinator.data
+        )
+        if method == INSTALL_METHOD_ADB:
+            requires_remote = False  # a shell install never asks
         return {
+            "auto_update": self._auto_options()[0],
+            "last_auto_update": self._last_auto,
+            "auto_update_failures": self._auto_failures,
+            "install_method": method,
             "install_error": update.get("error"),
             "install_permission": permissions.get("installPackages"),
             "requires_remote": requires_remote,
             "pending_confirmation": bool(update.get("pendingUserAction")),
         }
+
+    def _requires_remote(self) -> bool:
+        return requires_remote(self.coordinator.data)
+
+    def _up_to_date(self) -> bool:
+        installed = self.installed_version
+        return bool(installed) and installed == self.latest_version
+
+    @callback
+    def _clear_auto_failures(self) -> None:
+        self._auto_failures = 0
+        ir.async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"{ISSUE_AUTO_UPDATE_FAILED}_{self.coordinator.config_entry.entry_id}",
+        )
+        self.async_write_ha_state()
 
     async def async_install(self, version: str | None, backup: bool, **kwargs) -> None:
         """Trigger the app's self-update on the TV.
@@ -226,13 +421,248 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         On Android 12+ this completes silently; older devices show the system's
         install confirmation on screen, which has to be accepted with the remote.
         """
+        if self.in_progress:
+            # Normally unreachable from the UI (the button is disabled while
+            # in_progress), but an action or automation can still call it.
+            raise HomeAssistantError(
+                "An update of the PiPup app is already running on this TV"
+            )
+        if (
+            effective_method(self.coordinator.config_entry.options, self.coordinator.data)
+            == INSTALL_METHOD_ADB
+        ):
+            try:
+                await self._async_install_adb()
+            except AdbError as err:
+                raise HomeAssistantError(f"ADB install failed: {err}") from err
+            # one TV per press: nothing else needs the ~8 MB any more
+            forget_apk(self.hass)
+            return
         try:
-            await self.coordinator.client.update_app()
+            await self._async_install_app()
         except PiPupError as err:
             raise HomeAssistantError(str(err)) from err
+
+    async def _async_install_app(self) -> None:
+        """Ask the app to update itself; progress runs until the version changes."""
+        version_at_install = self.installed_version
+        await self.coordinator.client.update_app()
+        self._version_at_install = version_at_install
         self._install_requested_at = dt_util.utcnow()
+        self.coordinator.set_update_polling(True)
         self.async_write_ha_state()
         await self.coordinator.async_refresh_soon()
+
+    async def _async_install_adb(self, auto: bool = False) -> None:
+        """Install the latest APK over ADB, like install.sh: no press on the TV.
+
+        Runs inside async_install, so Home Assistant shows progress for its whole
+        duration; in_progress stays true afterwards until the coordinator sees the
+        new version, the same as for the app's own update. Raises AdbError.
+
+        `auto`: an unattended run never opens the app on a TV that is on - someone
+        may be watching. The install itself has landed then; the app starts the
+        next time the TV is switched on (`tv_in_use`).
+        """
+        host = self.coordinator.client.host
+        before = self.installed_version
+        self._version_at_install = before
+        self._install_requested_at = dt_util.utcnow()
+        self.coordinator.set_update_polling(True)
+        self.async_write_ha_state()
+        try:
+            release = await _latest_release(self.hass, self._source)
+            if not release:
+                raise AdbError("release_unavailable")
+            apk = release_apk(release)
+            if apk is None:
+                raise AdbError("no_apk")
+            data = await async_download_apk(self.hass, apk)
+            async with PiPupAdb(
+                self.hass, host, self.coordinator.config_entry.options
+            ) as adb:
+                await adb.connect(ADB_AUTH_TIMEOUT)
+                await adb.install(data)
+                await adb.start_service()
+                if not await self._app_back():
+                    # TCL's vendor guard freezes a background-started service
+                    if auto and not await adb.asleep():
+                        raise AdbError("tv_in_use")
+                    _LOGGER.debug("PiPup on %s silent after install; opening it", host)
+                    await adb.start_activity()
+                    if not await self._app_back():
+                        raise AdbError("app_not_back")
+        except AdbError as err:
+            self._install_requested_at = None
+            self.async_write_ha_state()
+            _LOGGER.warning("ADB install of PiPup on %s failed: %s", host, err)
+            raise
+        except BaseException:
+            # anything unforeseen: no Install button stuck "in progress" for 15 min
+            self._install_requested_at = None
+            self.async_write_ha_state()
+            raise
+        await self.coordinator.async_refresh()
+        _LOGGER.info(
+            "PiPup app on %s updated %s → %s (ADB)",
+            self.coordinator.config_entry.title,
+            before,
+            self.installed_version,
+        )
+
+    def _auto_options(self):
+        """(enabled, window start, window end) from the options, read live."""
+        options = self.coordinator.config_entry.options
+        return (
+            bool(options.get(CONF_AUTO_UPDATE, False)),
+            parse_time(options.get(CONF_QUIET_START), DEFAULT_QUIET_START),
+            parse_time(options.get(CONF_QUIET_END), DEFAULT_QUIET_END),
+        )
+
+    async def _async_auto_tick(self, _now=None) -> None:
+        """Install a new release by itself: inside the window, once a night, one TV
+        at a time, only when nothing is on screen.
+
+        Nothing here waits on another TV: a TV whose turn it is while another one
+        installs simply tries again at the next tick.
+        """
+        enabled, start, end = self._auto_options()
+        if not enabled:
+            if self._auto_failures:
+                self._clear_auto_failures()  # switched off: no repair about it
+            return
+        night = window_start(dt_util.now(), start, end)
+        if night is None:
+            # the night's installs are over: the shared APK (~8 MB) can go
+            forget_apk(self.hass)
+            return
+        if self._last_auto and self._attempted_since(night):
+            return  # this night's attempt was made (success or not)
+        if self.state != STATE_ON or self.in_progress or self._auto_pending:
+            return  # nothing to install (also: a skipped version), or already busy
+        record = self._last_auto or {}
+        if record.get("waiting_for_tv") and record.get("to") == self.latest_version:
+            return  # installed, the app waits for the TV to be switched on (tv_in_use)
+        data = self.coordinator.data
+        if not self.coordinator.online or data.get("visible"):
+            return  # unreachable, or a popup on screen: try again at the next tick
+        method = effective_method(self.coordinator.config_entry.options, data)
+        if method != INSTALL_METHOD_ADB and self._requires_remote():
+            # the app's own update would wait for a press on the remote at night
+            _LOGGER.debug("PiPup on %s: automatic update needs ADB here", self.entity_id)
+            return
+        lock = self.hass.data.setdefault(DOMAIN, {}).setdefault(
+            _AUTO_LOCK_KEY, asyncio.Lock()
+        )
+        if lock.locked() or self.hass.data[DOMAIN].get(_AUTO_RUNNING_KEY):
+            return  # another TV installs right now
+        async with lock:
+            before = self.installed_version
+            try:
+                if method == INSTALL_METHOD_ADB:
+                    await self._async_install_adb(auto=True)
+                else:
+                    await self._async_install_app()
+                    # closed in _handle_coordinator_update
+                    self._auto_requested_at = dt_util.utcnow()
+                    self._set_auto_pending(True)
+                    self._last_auto = {"time": dt_util.now().isoformat(), "result": "requested",
+                                       "from": before, "to": None, "method": "app"}
+                    self.async_write_ha_state()
+                    return
+            except AdbError as err:
+                if err.reason == "tv_in_use":
+                    # installed; the app comes back when the TV is switched on
+                    self._auto_result(
+                        "success", before, "adb", REASONS["tv_in_use"], self.latest_version
+                    )
+                    # remembered (and restored): no reinstall while the app waits
+                    self._last_auto["waiting_for_tv"] = True
+                    self.async_write_ha_state()
+                else:
+                    self._auto_result(err.reason, before, "adb", err.detail)
+                return
+            except PiPupError as err:
+                self._auto_result("app_unreachable", before, "app", str(err))
+                return
+            except Exception as err:  # noqa: BLE001 - a timer job: record, never retry every tick
+                _LOGGER.exception("Automatic PiPup update on %s failed", self.entity_id)
+                self._auto_result("unexpected", before, method, repr(err))
+                return
+        self._auto_result("success", before, "adb")
+
+    def _attempted_since(self, night) -> bool:
+        """Whether the last automatic attempt falls in the window that started at `night`."""
+        when = dt_util.parse_datetime(str((self._last_auto or {}).get("time") or ""))
+        if when is None:
+            return False
+        # On the wall clock: in the hour that repeats when the clocks go back, two
+        # instants share one local time, and a UTC comparison would see a new night.
+        local = when.astimezone(night.tzinfo).replace(tzinfo=None)
+        return local >= night.replace(tzinfo=None)
+
+    @callback
+    def _auto_result(
+        self, result: str, before, method: str, detail: str = "", after=None
+    ) -> None:
+        """Record an automatic run: logbook + log, failures counted, repair if needed."""
+        name = self.coordinator.config_entry.title
+        after = after or self.installed_version
+        self._last_auto = {
+            "time": dt_util.now().isoformat(),
+            "result": result,
+            "from": before,
+            "to": after if result == "success" else None,
+            "method": method,
+        }
+        issue_id = f"{ISSUE_AUTO_UPDATE_FAILED}_{self.coordinator.config_entry.entry_id}"
+        if result == "success":
+            self._auto_failures = 0
+            message = f"PiPup app updated {before} → {after} ({method.upper()})"
+            if detail:
+                message += f"; {detail}"
+            _LOGGER.info("%s: %s", name, message)
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+        else:
+            self._auto_failures += 1
+            reason = REASONS.get(result, result)
+            message = f"automatic PiPup app update failed: {reason}"
+            if detail:
+                message += f" ({detail})"
+            _LOGGER.warning("%s: %s; next try tomorrow night", name, message)
+            if result in _USER_FIXABLE or self._auto_failures >= AUTO_UPDATE_MAX_FAILURES:
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    issue_id,
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    translation_key=ISSUE_AUTO_UPDATE_FAILED,
+                    translation_placeholders={
+                        "name": name,
+                        "reason": reason,
+                        "failures": str(self._auto_failures),
+                    },
+                )
+        if "logbook" in self.hass.config.components:
+            from homeassistant.components.logbook import async_log_entry
+
+            async_log_entry(self.hass, name, message, DOMAIN, self.entity_id)
+        self.async_write_ha_state()
+
+    async def _app_back(self) -> bool:
+        """Wait for /state to answer again after the install."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ADB_APP_BACK_TIMEOUT
+        while True:
+            try:
+                await self.coordinator.client.state()
+            except PiPupError:
+                if loop.time() >= deadline:
+                    return False
+                await asyncio.sleep(ADB_APP_BACK_POLL)
+            else:
+                return True
 
     async def async_update(self) -> None:
         """Refresh the latest release tag from the shared cache.
@@ -244,5 +674,10 @@ class PiPupUpdateEntity(PiPupEntity, UpdateEntity):
         self._latest = await _latest_release_tag(self.hass, self._source)
         installed = self.installed_version
         if installed and self._latest and installed != self._latest:
-            if AwesomeVersion(installed) > AwesomeVersion(self._latest):
+            try:
+                newer = AwesomeVersion(installed) > AwesomeVersion(self._latest)
+            except AwesomeVersionException:
+                # an unparseable version on either side: nothing to compare, keep the tag
+                newer = False
+            if newer:
                 self._latest = await _latest_release_tag(self.hass, self._source, force=True)
