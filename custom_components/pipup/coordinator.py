@@ -28,6 +28,7 @@ from .const import (
     CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
+    CONF_WATCH,
     DEFAULT_UPDATE_SOURCE,
     UPDATE_SOURCE_OFF,
     DEFAULT_SCAN_INTERVAL,
@@ -94,6 +95,8 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._setting_up_push = False
         # update source the entities were built with; a change reloads the entry
         self.applied_update_source: str | None = None
+        # watch list the sensors were built with; a change reloads the entry
+        self.applied_watch: str | None = None
         # event/reason/removedId/replacedId of the last push, read by the overlays
         # to say why their popup left the screen
         self.last_event: dict[str, Any] = {}
@@ -279,6 +282,10 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if source == UPDATE_SOURCE_OFF
             else {"updateChecks": "true", "updateSource": source}
         )
+        # TV state push: only to an app that has it (an older one ignores the key
+        # anyway, but then nothing would ever answer the sensors)
+        if "watch" in (self.data or {}):
+            values["watch"] = self.config_entry.options.get(CONF_WATCH) or ""
         try:
             await self.client.settings(**values)
         except PiPupError as err:
@@ -305,7 +312,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         extra = {
             k: data.pop(k, None)
-            for k in ("event", "reason", "shownId", "removedId", "replacedId")
+            for k in (
+                "event", "reason", "shownId", "removedId", "replacedId",
+                # watch (TV state push) and job
+                "key", "old", "new", "kind", "run", "result",
+            )
         }
         self.online = True
         self._check_overlay_permission(data)
@@ -331,6 +342,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "device_id": device.id if device else None,
                 "pipup_id": data.get("id"),
                 "device_name": data.get("name"),
+                **{
+                    k: extra[k]
+                    for k in ("key", "old", "new", "kind", "run", "result")
+                    if extra["event"] in ("watch", "job")
+                },
             },
         )
 

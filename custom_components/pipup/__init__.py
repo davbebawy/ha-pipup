@@ -28,6 +28,7 @@ from .const import (  # noqa: F401
     CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
+    CONF_WATCH,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UPDATE_SOURCE,
     DOMAIN,
@@ -82,6 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PiPupConfigEntry) -> boo
     coordinator.applied_update_source = (
         entry.options.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE
     )
+    coordinator.applied_watch = entry.options.get(CONF_WATCH) or ""
     coordinator.overlays = OverlayManager(hass, entry, coordinator)
     await coordinator.overlays.async_setup()
     coordinator.applied_pages = entry.options.get(CONF_OVERLAY_PAGES)
@@ -248,6 +250,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: PiPupConfigEntry) -
         hass.config_entries.async_schedule_reload(entry.entry_id)
         return
     coordinator.applied_update_source = source
+    if (entry.options.get(CONF_WATCH) or "") != coordinator.applied_watch:
+        # one sensor per watched key, built at setup; the reload also sends the list
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+        return
     if coordinator.push_active:
         return  # push: the poll interval does not apply
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL)

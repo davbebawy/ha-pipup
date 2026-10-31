@@ -42,6 +42,7 @@
         "data": {
           "scan_interval": "Polling-interval (seconden; niet gebruikt als de app pusht)",
           "update_source": "Bron voor app-updates: github:eigenaar/repo, een map-URL met releases.json (LAN-mirror), of off",
+          "watch": "Volgen op de tv (tv-status-push): prop:<property>, system:/secure:/global:<settings-sleutel>, kommagescheiden; elk een sensor",
           "name_suffix": "Naam-achtervoegsel",
           "default_position": "Standaardpositie",
           "default_duration": "Standaardduur (s, 0 = tot sluiten)",
@@ -103,7 +104,8 @@
       "adb_not_authorized": "De tv heeft foutopsporing vanaf Home Assistant niet toegestaan.",
       "adb_no_androidtv_key": "De ADB-sleutel van de Android TV-integratie bestaat niet. Kies de eigen sleutel.",
       "adb_key_unreadable": "Het ADB-sleutelbestand (of de .pub ervan) is niet leesbaar. Kies de andere sleutel, of verwijder het beschadigde bestand uit .storage.",
-      "auto_update_needs_adb": "Op deze tv vraagt de eigen update van de app om een druk op de afstandsbediening, dus automatische updates vereisen installatiemethode Automatisch of ADB."
+      "auto_update_needs_adb": "Op deze tv vraagt de eigen update van de app om een druk op de afstandsbediening, dus automatische updates vereisen installatiemethode Automatisch of ADB.",
+      "invalid_watch": "Gebruik prop:, system:, secure: of global: gevolgd door een naam (letters, cijfers, . _ -), kommagescheiden, hooguit 32."
     }
   },
   "entity": {

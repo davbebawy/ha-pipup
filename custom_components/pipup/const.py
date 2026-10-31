@@ -25,6 +25,9 @@ CONF_PARENT_DEVICE: Final = "parent_device"
 CONF_UPDATE_SOURCE: Final = "update_source"
 DEFAULT_UPDATE_SOURCE: Final = "github:mhoogenbosch/PiPup"
 UPDATE_SOURCE_OFF: Final = "off"
+# TV state push: what the app watches, a comma list of prop:<system property> and
+# system:|secure:|global:<settings key>. Empty = nothing. One sensor per entry.
+CONF_WATCH: Final = "watch"
 # Advanced install (options section): how the app is updated. App (default) = the
 # app's own self-update, as before 1.29. Auto = that where it is silent (Android 12+),
 # a built-in ADB install below that. ADB = always ADB.

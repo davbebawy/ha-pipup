@@ -42,6 +42,7 @@
         "data": {
           "scan_interval": "Polling interval (seconds; not used when the app pushes)",
           "update_source": "App update source: github:owner/repo, a folder URL with releases.json (LAN mirror), or off",
+          "watch": "Watch on the TV (TV state push): prop:<property>, system:/secure:/global:<settings key>, comma separated; one sensor each",
           "name_suffix": "Name suffix",
           "default_position": "Default position",
           "default_duration": "Default duration (s, 0 = until dismissed)",
@@ -103,7 +104,8 @@
       "adb_not_authorized": "The TV did not allow debugging from Home Assistant.",
       "adb_no_androidtv_key": "The Android TV integration's ADB key does not exist. Choose the own key.",
       "adb_key_unreadable": "The ADB key file (or its .pub) cannot be read. Choose the other key, or remove the damaged file from .storage.",
-      "auto_update_needs_adb": "On this TV the app's own update needs a press on the remote, so automatic updates need the install method Auto or ADB."
+      "auto_update_needs_adb": "On this TV the app's own update needs a press on the remote, so automatic updates need the install method Auto or ADB.",
+      "invalid_watch": "Use prop:, system:, secure: or global: followed by a name (letters, digits, . _ -), comma separated, at most 32."
     }
   },
   "entity": {

@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import CONF_WATCH
 from .coordinator import PiPupCoordinator, popup_ids
 from .entity import PiPupEntity
 from .overlay_entities import async_add_sensors as async_add_overlay_sensors
@@ -40,6 +41,13 @@ async def async_setup_entry(
         entities.append(PiPupUptimeSensor(coordinator, entry))
     if "version" in coordinator.data:
         entities.append(PiPupAppVersionSensor(coordinator, entry))
+    # TV state push: one sensor per watched key, when the app can watch
+    if "watch" in coordinator.data:
+        entities.extend(
+            PiPupWatchSensor(coordinator, entry, key)
+            for key in (entry.options.get(CONF_WATCH) or "").split(",")
+            if key
+        )
     async_add_entities(entities)
     async_add_overlay_sensors(coordinator.overlays, async_add_entities)
 
@@ -165,3 +173,35 @@ class PiPupAppVersionSensor(PiPupEntity, SensorEntity):
     def native_value(self) -> str | None:
         """Return the app version reported by the TV."""
         return self.coordinator.data.get("version")
+
+
+class PiPupWatchSensor(PiPupEntity, SensorEntity):
+    """A watched system property or settings key (TV state push).
+
+    The app pushes each change, so the value is current without a poll. Unknown
+    while the TV cannot read the key (`error` attribute says why) or it is unset.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: PiPupCoordinator, entry, key: str) -> None:
+        """Initialize the sensor for one watch entry, e.g. prop:sys.tcl.inputid."""
+        super().__init__(coordinator, entry, f"watch_{key}")
+        self._key = key
+        self._attr_name = key
+
+    @property
+    def _watch(self) -> dict[str, Any]:
+        value = self.coordinator.data.get("watch")
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the current value the TV reported."""
+        return (self._watch.get("values") or {}).get(self._key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Why the TV cannot read this key, when it cannot."""
+        error = (self._watch.get("errors") or {}).get(self._key)
+        return {"error": error} if error else None

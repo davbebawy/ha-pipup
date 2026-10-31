@@ -8,6 +8,10 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
 ## [Unreleased]
+### Added
+- **TV state push** *(app with `watch`)*: option *Watch on the TV* sends a list of system properties and
+  settings keys to the app; one diagnostic sensor per key, updated by push. `pipup_event` carries `key`,
+  `old` and `new` for `watch` events, and `kind`, `run` and `result` for `job` events.
 
 ## [v1.30.1] — 2026-10-25 (ADB install on slow TVs)
 ### Fixed

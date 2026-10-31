@@ -222,6 +222,18 @@ Per-TV popup defaults (position, duration, muted, sizes, colors, border styling)
 numeric border fields: **empty** means "no default", while **0** is a real value (no border /
 square corners).
 
+### TV state push
+
+*Configure* > **Watch on the TV** takes a comma list of system properties and settings keys for the app
+to watch: `prop:<property>` and `system:`, `secure:` or `global:<settings key>`. Each gets a diagnostic
+sensor named after the entry, and each change arrives as a push (no poll): the sensor updates and
+`pipup_event` fires with `event: watch`, `key`, `old` and `new`. Nothing vendor-specific is built in.
+On a TCL Google TV, for example: `prop:sys.tcl.inputid,prop:sys.tcl.powerstatus,system:recent_play_channel_id`.
+A key the TV refuses to an app reads unknown, with the reason in the sensor's `error` attribute.
+
+A shell script on the TV can report a job result: `am broadcast -a nl.rogro82.pipup.JOB --es kind <kind>
+--es run <id> --es result <result>` fires `pipup_event` with `event: job`, `kind`, `run` and `result`.
+
 ### Screen on/off
 
 The **Screen** switch needs app ≥ 0.7.0. Turning the TV *on* works out of the box. Turning it *off*

@@ -85,6 +85,7 @@ from .const import (
     CONF_PARENT_DEVICE,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
+    CONF_WATCH,
     DEFAULT_ICON_POSITION,
     DEFAULT_UPDATE_SOURCE,
     DEFAULT_PORT,
@@ -342,6 +343,28 @@ _UPDATE_SOURCE_RE = re.compile(
     r"^(off|github:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|https?://\S+)$"
 )
 
+# the app's watch list syntax (PiPup Watch.parse): at most 32 entries
+_WATCH_ENTRY_RE = re.compile(r"^(prop|system|secure|global):[A-Za-z0-9._-]{1,128}$")
+WATCH_MAX = 32
+
+
+def parse_watch(value: str | None) -> list[str]:
+    """The watch option as a list of entries; raises ValueError on a bad one."""
+    entries: list[str] = []
+    for raw in (value or "").split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
+        prefix, _, name = entry.partition(":")
+        entry = f"{prefix.lower()}:{name}"
+        if not _WATCH_ENTRY_RE.match(entry):
+            raise ValueError(entry)
+        if entry not in entries:
+            entries.append(entry)
+    if len(entries) > WATCH_MAX:
+        raise ValueError("too many")
+    return entries
+
 
 class PiPupOptionsFlow(OptionsFlow):
     """Options flow: polling, entity names and per-device popup defaults."""
@@ -408,6 +431,12 @@ class PiPupOptionsFlow(OptionsFlow):
             errors[CONF_UPDATE_SOURCE] = "invalid_update_source"
             user_input = None
         if user_input is not None:
+            try:
+                parse_watch(user_input.get(CONF_WATCH))
+            except ValueError:
+                errors[CONF_WATCH] = "invalid_watch"
+                user_input = None
+        if user_input is not None:
             # merge into the existing options: keys not in this form
             # (applied-suffix marker) must survive
             options = dict(self.config_entry.options)
@@ -415,6 +444,7 @@ class PiPupOptionsFlow(OptionsFlow):
             options[CONF_UPDATE_SOURCE] = (
                 user_input.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE
             ).strip()
+            options[CONF_WATCH] = ",".join(parse_watch(user_input.get(CONF_WATCH)))
             if parent := user_input.get(CONF_PARENT_DEVICE):
                 options[CONF_PARENT_DEVICE] = parent
             else:
@@ -524,6 +554,10 @@ class PiPupOptionsFlow(OptionsFlow):
                     vol.Optional(
                         CONF_UPDATE_SOURCE,
                         default=opts.get(CONF_UPDATE_SOURCE, DEFAULT_UPDATE_SOURCE),
+                    ): str,
+                    vol.Optional(
+                        CONF_WATCH,
+                        description={"suggested_value": opts.get(CONF_WATCH, "")},
                     ): str,
                     vol.Optional(
                         CONF_NAME_SUFFIX,
