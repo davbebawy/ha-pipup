@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -23,8 +24,10 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from .adb import AdbError, PiPupAdb
 from .api import PiPupClient, PiPupError
 from .const import (
+    CONF_ADB_REGRANT,
     CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
@@ -46,6 +49,27 @@ _LOGGER = logging.getLogger(__name__)
 # popup, ~75 ms later it did. Refreshing inside that window shows the old state until
 # the next poll, so the post-call refresh waits this long first.
 POST_CALL_SETTLE_SECONDS = 0.5
+# Y10 regrant: one ADB attempt at a time per TV, at most one per this many seconds,
+# so a grant the TV refuses does not turn into an ADB connection on every push
+REGRANT_MIN_INTERVAL = 600
+# the regrant connects to a TV that already trusts HA: never wait for a prompt long
+REGRANT_AUTH_TIMEOUT = 5.0
+# the grants the app reports that ADB can set; None = the device has no such grant
+REGRANT_KEYS = ("overlay", "installPackages", "autoStart")
+
+
+def missing_grants(permissions: Any, accessibility_was_on: bool) -> list[str]:
+    """Grants the app reports missing that a regrant can set back (Y10).
+
+    Accessibility counts only when it was on before: it is opt-in, and a TV whose user
+    never enabled it must not get it from a heal.
+    """
+    if not isinstance(permissions, dict):
+        return []
+    missing = [key for key in REGRANT_KEYS if permissions.get(key) is False]
+    if accessibility_was_on and permissions.get("accessibility") is False:
+        missing.append("accessibility")
+    return missing
 
 
 def popups_on_screen(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -117,6 +141,14 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._normal_interval = update_interval
         self._sw_version: str | None = None
+        # Y10: whether the app's accessibility service was seen on, and the last heal
+        self._accessibility_was_on = False
+        self._regranting = False
+        self._regrant_at = 0.0
+        # the grants the last round tried to set; the same set is not tried again
+        # (a TV that refuses, or no longer trusts HA, would get a prompt each time)
+        self._regrant_tried: list[str] | None = None
+        self.last_regrant: dict[str, Any] | None = None
 
     def set_update_polling(self, active: bool) -> None:
         """Poll every UPDATE_POLL_INTERVAL while an app update runs, normally otherwise.
@@ -142,6 +174,7 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.data
         self.online = True
         self._check_overlay_permission(data)
+        self._check_grants(data)
         self._sync_sw_version(data)
         push = data.get("push") or {}
         # The app lost its webhook (reinstall wipes its prefs): set it again.
@@ -309,6 +342,7 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         self.online = True
         self._check_overlay_permission(data)
+        self._check_grants(data)
         self._sync_sw_version(data)
         self.last_event = extra
         self.async_set_updated_data(data)
@@ -378,6 +412,56 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data={"entry_id": self.config_entry.entry_id},
             learn_more_url="https://github.com/mhoogenbosch/PiPup#install",
         )
+
+    def _check_grants(self, data: dict[str, Any]) -> None:
+        """Y10: a grant went missing (reinstall): set it back over ADB, if allowed."""
+        permissions = data.get("permissions")
+        if isinstance(permissions, dict) and permissions.get("accessibility"):
+            self._accessibility_was_on = True
+        if not self.config_entry.options.get(CONF_ADB_REGRANT):
+            return
+        missing = missing_grants(permissions, self._accessibility_was_on)
+        if not missing:
+            self._regrant_tried = None  # all back: a later loss gets a new round
+            return
+        if self._regranting or missing == self._regrant_tried:
+            return
+        update = data.get("update") or {}
+        if update.get("installing") or update.get("phase"):
+            return  # an install sets the grants itself when it is done
+        if self._regrant_at and time.monotonic() - self._regrant_at < REGRANT_MIN_INTERVAL:
+            return
+        self._regranting = True
+        self._regrant_at = time.monotonic()
+        self._regrant_tried = missing
+        self.config_entry.async_create_background_task(
+            self.hass, self._async_regrant(missing), f"pipup regrant {self.client.host}"
+        )
+
+    async def _async_regrant(self, missing: list[str]) -> None:
+        """Connect over ADB, set the grants back, then read the state again."""
+        result = "ok"
+        try:
+            async with PiPupAdb(
+                self.hass, self.client.host, self.config_entry.options
+            ) as adb:
+                await adb.connect(REGRANT_AUTH_TIMEOUT)
+                await adb.regrant(accessibility="accessibility" in missing)
+            _LOGGER.info(
+                "PiPup %s: set missing grants back over ADB: %s",
+                self.config_entry.title, ", ".join(missing),
+            )
+        except AdbError as err:
+            result = err.reason
+            _LOGGER.warning(
+                "PiPup %s: cannot set missing grants (%s) over ADB: %s",
+                self.config_entry.title, ", ".join(missing), err,
+            )
+        finally:
+            self._regranting = False
+            self.last_regrant = {"missing": missing, "result": result}
+        if result == "ok":
+            await self.async_refresh_soon()
 
     async def async_refresh_soon(self) -> None:
         """Refresh state right after a show/dismiss call.

@@ -79,6 +79,7 @@
               "install_method": "Install method",
               "adb_port": "ADB port",
               "adb_key": "ADB key",
+              "adb_regrant": "Set lost permissions back over ADB",
               "auto_update": "Automatic updates",
               "quiet_start": "Quiet window from",
               "quiet_end": "Quiet window until"
@@ -87,7 +88,8 @@
               "install_method": "App self-update: as before; on Android < 12 the TV asks for a press of OK. Auto: the app's own update on Android 12+ (silent), an ADB install on older versions. ADB: always ADB. Choosing Auto or ADB tests the connection when you save.",
               "adb_key": "PiPup's own key (.storage/pipup_adbkey), or the Android TV integration's, so a TV that already trusts it shows no new prompt.",
               "auto_update": "Install a new PiPup release by itself inside the quiet window: one TV at a time, never while a popup is on screen, and on a TV that is on the app is never opened. Success only writes a logbook entry; a failure retries the next night, with a repair after 3 failed nights (or at once when something on the TV needs fixing). Needs ADB on Android < 12.",
-              "quiet_start": "Local time. A window may cross midnight; the same start and end time = all day."
+              "quiet_start": "Local time. A window may cross midnight; the same start and end time = all day.",
+              "adb_regrant": "When the app reports a permission missing (every reinstall resets them), set it back over ADB: overlay, install, TCL auto-start, and the accessibility service if it was on. At most once per 10 minutes. Tests the connection when you save."
             }
           }
         }

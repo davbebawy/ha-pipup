@@ -39,6 +39,9 @@ CONF_ADB_PORT: Final = "adb_port"
 DEFAULT_ADB_PORT: Final = 5555
 # which key signs the ADB connection: our own, or the Android TV integration's
 CONF_ADB_KEY: Final = "adb_key"
+# Y10: re-apply the app-ops a reinstall resets (overlay, install, TCL auto-start,
+# accessibility) over ADB as soon as the app reports one missing. Off by default.
+CONF_ADB_REGRANT: Final = "adb_regrant"
 ADB_KEY_OWN: Final = "own"
 ADB_KEY_ANDROIDTV: Final = "androidtv"
 ADB_KEYS: Final = [ADB_KEY_OWN, ADB_KEY_ANDROIDTV]

@@ -8,6 +8,11 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
 ## [Unreleased]
+### Added
+- **Lost permissions set back over ADB**: option in Advanced install (off by default). When the app reports
+  a reset grant (overlay, install, TCL auto-start, or the accessibility service that was on), it is set
+  back over ADB; at most once per 10 minutes, never during an app update; `last_regrant` in diagnostics.
+  The accessibility write is read back and repeated once (the first one after an install may not stick).
 
 ## [v1.30.1] — 2026-10-25 (ADB install on slow TVs)
 ### Fixed

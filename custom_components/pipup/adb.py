@@ -326,22 +326,33 @@ class PiPupAdb:
             raise AdbError("signature_mismatch", out)
         if "Success" not in out:
             raise AdbError("install_failed", out)
+        await self.regrant(accessibility=PACKAGE in accessibility)
 
-        # the app-ops a reinstall resets and the app cannot set itself
+    async def regrant(self, accessibility: bool) -> None:
+        """The app-ops a reinstall resets and the app cannot set itself.
+
+        `accessibility`: also put the app's accessibility service back in the enabled
+        list (only when the user had it on; the list keeps the other services).
+        """
         await self.shell(f"appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow")
         await self.shell(f"appops set {PACKAGE} REQUEST_INSTALL_PACKAGES allow")
         # TCL only; elsewhere "Unknown operation string", which is fine
         await self.shell(f"cmd appops set {PACKAGE} android:auto_start allow")
-        if PACKAGE in accessibility:
+        if not accessibility:
+            return
+        # Right after an install the first `settings put` may not stick (seen on a
+        # TCL): read back and write once more.
+        for _ in range(2):
             current = await self.shell("settings get secure enabled_accessibility_services")
-            if PACKAGE not in current:
-                merged = (
-                    ACCESSIBILITY_COMPONENT
-                    if current in ("", "null")
-                    else f"{current}:{ACCESSIBILITY_COMPONENT}"
-                )
-                await self.shell(f"settings put secure enabled_accessibility_services {merged}")
-                await self.shell("settings put secure accessibility_enabled 1")
+            if PACKAGE in current:
+                return
+            merged = (
+                ACCESSIBILITY_COMPONENT
+                if current in ("", "null")
+                else f"{current}:{ACCESSIBILITY_COMPONENT}"
+            )
+            await self.shell(f"settings put secure enabled_accessibility_services {merged}")
+            await self.shell("settings put secure accessibility_enabled 1")
 
     async def start_service(self) -> None:
         """Start the service in the background: does not touch the screen."""

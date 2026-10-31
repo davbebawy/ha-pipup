@@ -119,7 +119,7 @@ async def test_install_steps(hass: HomeAssistant) -> None:
     """install.sh's steps: push, pm install, remove, app-ops, accessibility back."""
     access = "nl.rogro82.pipup/nl.rogro82.pipup.PiPupAccessibilityService"
     device = _fake_device({"pm install": "Success"})
-    reads = iter([access, "null"])  # on before the install, reset by it
+    reads = iter([access, "null", access])  # on before, reset by the install, back after the put
 
     async def shell(command, **_):
         device.calls.append(command)

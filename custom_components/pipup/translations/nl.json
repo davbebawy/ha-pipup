@@ -79,6 +79,7 @@
               "install_method": "Installatiemethode",
               "adb_port": "ADB-poort",
               "adb_key": "ADB-sleutel",
+              "adb_regrant": "Verloren rechten via ADB terugzetten",
               "auto_update": "Automatische updates",
               "quiet_start": "Rustig venster vanaf",
               "quiet_end": "Rustig venster tot"
@@ -87,7 +88,8 @@
               "install_method": "Self-update van de app: zoals voorheen; op Android < 12 vraagt de tv om een druk op OK. Automatisch: de eigen update van de app op Android 12+ (stil), een ADB-install op oudere versies. ADB: altijd ADB. Bij kiezen van Automatisch of ADB wordt de verbinding getest zodra je opslaat.",
               "adb_key": "De eigen sleutel van PiPup (.storage/pipup_adbkey), of die van de Android TV-integratie, zodat een tv die die al vertrouwt geen nieuwe melding toont.",
               "auto_update": "Installeer een nieuwe PiPup-release vanzelf binnen het rustige venster: één tv tegelijk, nooit terwijl er een popup in beeld is, en op een tv die aan staat wordt de app nooit geopend. Een geslaagde update komt alleen in het logboek; een mislukte wordt de volgende nacht opnieuw geprobeerd, met een repair na 3 mislukte nachten (of meteen als er op de tv iets opgelost moet worden). Vereist ADB op Android < 12.",
-              "quiet_start": "Lokale tijd. Een venster mag over middernacht lopen; dezelfde begin- en eindtijd = de hele dag."
+              "quiet_start": "Lokale tijd. Een venster mag over middernacht lopen; dezelfde begin- en eindtijd = de hele dag.",
+              "adb_regrant": "Als de app meldt dat een recht ontbreekt (elke herinstallatie zet ze terug), zet het via ADB terug: overlay, installeren, TCL auto-start, en de toegankelijkheidsdienst als die aan stond. Hooguit eens per 10 minuten. Test de verbinding bij opslaan."
             }
           }
         }

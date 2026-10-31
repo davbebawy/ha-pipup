@@ -811,6 +811,17 @@ asleep. It never uninstalls the app (that would lose its device id): a build wit
 reported instead. The update entity's `install_method` attribute shows `app` or `adb`, and
 `requires_remote` is `false` with ADB.
 
+#### Lost permissions set back over ADB
+
+Every reinstall of the app (by hand, `adb install`, or a build with the same key) resets its app-ops. With
+**Set lost permissions back over ADB** on (Advanced install, off by default), the integration does that
+round itself as soon as the app reports a permission missing: overlay, install, `android:auto_start` on
+TCL, and the accessibility service if it was on before. It uses the same ADB port and key as the install,
+tests the connection when you turn it on, runs at most once per 10 minutes per TV, never during an
+app update (the install grants them itself), and never twice for the same missing grants: a TV that
+refuses (or no longer trusts Home Assistant) gets one attempt, not a prompt every 10 minutes. The result of the last round is in the diagnostics
+(`last_regrant`).
+
 #### Automatic updates (1.30.0)
 
 In the same section, **Automatic updates** installs each new release by itself inside a **quiet window**

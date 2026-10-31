@@ -30,6 +30,8 @@ async def async_get_config_entry_diagnostics(
         },
         "state": coordinator.data,
         "last_update_success": coordinator.last_update_success,
+        # Y10: the last time lost grants were set back over ADB, and how it ended
+        "last_regrant": coordinator.last_regrant,
         # Fetched live (app >= 0.9.0): per permission which activity resolves its
         # settings screen, whether that is a vendor placeholder, whether a background
         # activity launch is allowed at all, and how the last fix attempt ended. This is

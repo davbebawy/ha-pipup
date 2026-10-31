@@ -45,6 +45,7 @@ from .const import (
     ADB_KEYS,
     CONF_ADB_KEY,
     CONF_ADB_PORT,
+    CONF_ADB_REGRANT,
     CONF_ADVANCED_INSTALL,
     CONF_AUTO_UPDATE,
     CONF_INSTALL_METHOD,
@@ -336,6 +337,7 @@ _ADVANCED_INSTALL_DEFAULTS = {
     CONF_ADB_PORT: DEFAULT_ADB_PORT,
     CONF_ADB_KEY: ADB_KEY_OWN,
     CONF_AUTO_UPDATE: False,
+    CONF_ADB_REGRANT: False,
 }
 
 _UPDATE_SOURCE_RE = re.compile(
@@ -354,8 +356,10 @@ class PiPupOptionsFlow(OptionsFlow):
         return (coordinator.data if coordinator else None) or {}
 
     def _needs_adb(self, options: dict[str, Any]) -> bool:
-        """Whether these options make the Install button use ADB on this TV."""
-        return effective_method(options, self._device_data()) == INSTALL_METHOD_ADB
+        """Whether these options use ADB on this TV: Install button or regrant."""
+        return bool(options.get(CONF_ADB_REGRANT)) or (
+            effective_method(options, self._device_data()) == INSTALL_METHOD_ADB
+        )
 
     def _auto_update_needs_adb(self, options: dict[str, Any]) -> bool:
         """Automatic updates with the app's own update on a TV that needs the remote."""
@@ -490,6 +494,7 @@ class PiPupOptionsFlow(OptionsFlow):
             options[CONF_ADB_PORT] = int(advanced.get(CONF_ADB_PORT, DEFAULT_ADB_PORT))
             options[CONF_ADB_KEY] = advanced.get(CONF_ADB_KEY, ADB_KEY_OWN)
             options[CONF_AUTO_UPDATE] = bool(advanced.get(CONF_AUTO_UPDATE, False))
+            options[CONF_ADB_REGRANT] = bool(advanced.get(CONF_ADB_REGRANT, False))
             options[CONF_QUIET_START] = advanced.get(CONF_QUIET_START, DEFAULT_QUIET_START)
             options[CONF_QUIET_END] = advanced.get(CONF_QUIET_END, DEFAULT_QUIET_END)
             # Test ADB only when the section changed: a sleeping Fire TV has no
@@ -679,6 +684,10 @@ class PiPupOptionsFlow(OptionsFlow):
                                         mode=SelectSelectorMode.DROPDOWN,
                                     )
                                 ),
+                                vol.Required(
+                                    CONF_ADB_REGRANT,
+                                    default=opts.get(CONF_ADB_REGRANT, False),
+                                ): bool,
                                 vol.Required(
                                     CONF_AUTO_UPDATE,
                                     default=opts.get(CONF_AUTO_UPDATE, False),
