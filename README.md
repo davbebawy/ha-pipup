@@ -222,6 +222,15 @@ Per-TV popup defaults (position, duration, muted, sizes, colors, border styling)
 numeric border fields: **empty** means "no default", while **0** is a real value (no border /
 square corners).
 
+### Foreground app
+
+*Configure* > **Push the app in front** (off by default) asks the app to report which app is in front
+(live TV, Netflix, YouTube). It needs PiPup's accessibility service enabled on the TV; the service then
+reads the package and class name of the window that comes to the front, never its content. A sensor
+**Foreground app** holds the package (attributes `previous` and `available`), and each change fires
+`pipup_event` with `event: foreground_app`, `package` and `previous`. Use it, for example, to show an
+overlay only while live TV is on.
+
 ### Screen on/off
 
 The **Screen** switch needs app ≥ 0.7.0. Turning the TV *on* works out of the box. Turning it *off*

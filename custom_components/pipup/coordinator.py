@@ -28,6 +28,7 @@ from .const import (
     CONF_PUSH_WEBHOOK_ID,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
+    CONF_FOREGROUND_APP,
     DEFAULT_UPDATE_SOURCE,
     UPDATE_SOURCE_OFF,
     DEFAULT_SCAN_INTERVAL,
@@ -94,6 +95,8 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._setting_up_push = False
         # update source the entities were built with; a change reloads the entry
         self.applied_update_source: str | None = None
+        # foreground app option the sensor was built with; a change reloads the entry
+        self.applied_foreground_app: bool | None = None
         # event/reason/removedId/replacedId of the last push, read by the overlays
         # to say why their popup left the screen
         self.last_event: dict[str, Any] = {}
@@ -279,6 +282,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if source == UPDATE_SOURCE_OFF
             else {"updateChecks": "true", "updateSource": source}
         )
+        # X1: only to an app that has it
+        if "foregroundApp" in (self.data or {}):
+            values["foregroundApp"] = (
+                "true" if self.config_entry.options.get(CONF_FOREGROUND_APP) else "false"
+            )
         try:
             await self.client.settings(**values)
         except PiPupError as err:
@@ -305,7 +313,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         extra = {
             k: data.pop(k, None)
-            for k in ("event", "reason", "shownId", "removedId", "replacedId")
+            for k in (
+                "event", "reason", "shownId", "removedId", "replacedId",
+                # foreground_app (X1)
+                "package", "previous",
+            )
         }
         self.online = True
         self._check_overlay_permission(data)
@@ -331,6 +343,11 @@ class PiPupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "device_id": device.id if device else None,
                 "pipup_id": data.get("id"),
                 "device_name": data.get("name"),
+                **(
+                    {"package": extra["package"], "previous": extra["previous"]}
+                    if extra["event"] == "foreground_app"
+                    else {}
+                ),
             },
         )
 

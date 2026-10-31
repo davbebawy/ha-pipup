@@ -85,6 +85,7 @@ from .const import (
     CONF_PARENT_DEVICE,
     CONF_SCAN_INTERVAL,
     CONF_UPDATE_SOURCE,
+    CONF_FOREGROUND_APP,
     DEFAULT_ICON_POSITION,
     DEFAULT_UPDATE_SOURCE,
     DEFAULT_PORT,
@@ -415,6 +416,7 @@ class PiPupOptionsFlow(OptionsFlow):
             options[CONF_UPDATE_SOURCE] = (
                 user_input.get(CONF_UPDATE_SOURCE) or DEFAULT_UPDATE_SOURCE
             ).strip()
+            options[CONF_FOREGROUND_APP] = bool(user_input.get(CONF_FOREGROUND_APP, False))
             if parent := user_input.get(CONF_PARENT_DEVICE):
                 options[CONF_PARENT_DEVICE] = parent
             else:
@@ -525,6 +527,10 @@ class PiPupOptionsFlow(OptionsFlow):
                         CONF_UPDATE_SOURCE,
                         default=opts.get(CONF_UPDATE_SOURCE, DEFAULT_UPDATE_SOURCE),
                     ): str,
+                    vol.Optional(
+                        CONF_FOREGROUND_APP,
+                        default=opts.get(CONF_FOREGROUND_APP, False),
+                    ): bool,
                     vol.Optional(
                         CONF_NAME_SUFFIX,
                         description={

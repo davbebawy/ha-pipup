@@ -25,6 +25,8 @@ CONF_PARENT_DEVICE: Final = "parent_device"
 CONF_UPDATE_SOURCE: Final = "update_source"
 DEFAULT_UPDATE_SOURCE: Final = "github:mhoogenbosch/PiPup"
 UPDATE_SOURCE_OFF: Final = "off"
+# X1: the app pushes which app is in front (needs its accessibility service). Off by default.
+CONF_FOREGROUND_APP: Final = "foreground_app"
 # Advanced install (options section): how the app is updated. App (default) = the
 # app's own self-update, as before 1.29. Auto = that where it is silent (Android 12+),
 # a built-in ADB install below that. ADB = always ADB.

@@ -42,6 +42,7 @@
         "data": {
           "scan_interval": "Polling-interval (seconden; niet gebruikt als de app pusht)",
           "update_source": "Bron voor app-updates: github:eigenaar/repo, een map-URL met releases.json (LAN-mirror), of off",
+          "foreground_app": "App op de voorgrond pushen (vraagt de toegankelijkheidsdienst van de app)",
           "name_suffix": "Naam-achtervoegsel",
           "default_position": "Standaardpositie",
           "default_duration": "Standaardduur (s, 0 = tot sluiten)",
@@ -144,6 +145,9 @@
       },
       "overlay_status": {
         "name": "Status"
+      },
+      "foreground_app": {
+        "name": "App op de voorgrond"
       }
     },
     "button": {

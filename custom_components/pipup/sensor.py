@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import CONF_FOREGROUND_APP
 from .coordinator import PiPupCoordinator, popup_ids
 from .entity import PiPupEntity
 from .overlay_entities import async_add_sensors as async_add_overlay_sensors
@@ -40,6 +41,9 @@ async def async_setup_entry(
         entities.append(PiPupUptimeSensor(coordinator, entry))
     if "version" in coordinator.data:
         entities.append(PiPupAppVersionSensor(coordinator, entry))
+    # X1: the app in front, when the app can report it and the option is on
+    if "foregroundApp" in coordinator.data and entry.options.get(CONF_FOREGROUND_APP):
+        entities.append(PiPupForegroundAppSensor(coordinator, entry))
     async_add_entities(entities)
     async_add_overlay_sensors(coordinator.overlays, async_add_entities)
 
@@ -165,3 +169,35 @@ class PiPupAppVersionSensor(PiPupEntity, SensorEntity):
     def native_value(self) -> str | None:
         """Return the app version reported by the TV."""
         return self.coordinator.data.get("version")
+
+
+class PiPupForegroundAppSensor(PiPupEntity, SensorEntity):
+    """Package of the app in front on the TV (X1), pushed on every change.
+
+    Unknown until the first change after the option was turned on, and while the app's
+    accessibility service is not bound (attribute `available`).
+    """
+
+    _attr_translation_key = "foreground_app"
+
+    def __init__(self, coordinator: PiPupCoordinator, entry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, entry, "foreground_app")
+
+    @property
+    def _foreground(self) -> dict[str, Any]:
+        value = self.coordinator.data.get("foregroundApp")
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the package in front."""
+        return self._foreground.get("package")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The app before it, and whether the TV can report at all."""
+        return {
+            "previous": self._foreground.get("previous"),
+            "available": self._foreground.get("available"),
+        }

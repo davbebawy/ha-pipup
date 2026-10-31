@@ -8,6 +8,10 @@ full story in English and Dutch. Features marked *(app ≥ x.y.z)* need a matchi
 [PiPup app](https://github.com/mhoogenbosch/PiPup) on the TV.
 
 ## [Unreleased]
+### Added
+- **Foreground app** *(app with `foregroundApp`)*: option *Push the app in front* (off by default); a
+  sensor with the package in front, kept current by push; `pipup_event` `foreground_app` carries
+  `package` and `previous`.
 
 ## [v1.30.1] — 2026-10-25 (ADB install on slow TVs)
 ### Fixed

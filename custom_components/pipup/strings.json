@@ -42,6 +42,7 @@
         "data": {
           "scan_interval": "Polling interval (seconds; not used when the app pushes)",
           "update_source": "App update source: github:owner/repo, a folder URL with releases.json (LAN mirror), or off",
+          "foreground_app": "Push the app in front (needs the app's accessibility service)",
           "name_suffix": "Name suffix",
           "default_position": "Default position",
           "default_duration": "Default duration (s, 0 = until dismissed)",
@@ -144,6 +145,9 @@
       },
       "popups_on_screen": {
         "name": "Popups on screen"
+      },
+      "foreground_app": {
+        "name": "Foreground app"
       }
     },
     "button": {
